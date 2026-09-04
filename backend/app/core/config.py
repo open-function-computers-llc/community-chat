@@ -34,3 +34,47 @@ def push_enabled() -> bool:
 # is set to https://your-domain; locally it's http://localhost:PORT.
 def app_origin() -> str:
     return os.environ.get("APP_ORIGIN", "").strip().rstrip("/") or "http://localhost:8983"
+
+
+# ---------------------------------------------------------------------------
+# Transactional email (SMTP). Sent via a provider (e.g. Resend, Mailgun) or
+# a local dev sink like Mailpit. All fields are optional; email is a no-op
+# (feature disabled) until SMTP_HOST + SMTP_FROM_ADDRESS are set.
+#
+# Local dev: docker-compose runs a Mailpit service and points the app at it
+# (SMTP_HOST=mailpit, SMTP_PORT=1025). See .env.local / docker-compose.yml.
+# ---------------------------------------------------------------------------
+def smtp_host() -> str | None:
+    """SMTP server host. None disables email entirely."""
+    return os.environ.get("SMTP_HOST", "").strip() or None
+
+
+def smtp_port() -> int:
+    return int(os.environ.get("SMTP_PORT", "587"))
+
+
+def smtp_username() -> str | None:
+    return os.environ.get("SMTP_USERNAME", "").strip() or None
+
+
+def smtp_password() -> str | None:
+    return os.environ.get("SMTP_PASSWORD", "").strip() or None
+
+
+def smtp_from_address() -> str | None:
+    """Sender (From) email address. Required to actually send."""
+    return os.environ.get("SMTP_FROM_ADDRESS", "").strip() or None
+
+
+def smtp_from_name() -> str:
+    return os.environ.get("SMTP_FROM_NAME", "Community Chat").strip() or "Community Chat"
+
+
+def smtp_timeout() -> int:
+    return int(os.environ.get("SMTP_TIMEOUT", "10"))
+
+
+def email_enabled() -> bool:
+    """Email requires a host + a From address. Without both, sends are skipped
+    and the settings endpoint reports the feature unavailable."""
+    return bool(smtp_host() and smtp_from_address())

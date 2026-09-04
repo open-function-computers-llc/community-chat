@@ -9,6 +9,7 @@ from ..models import GroupMessage, Reaction, User
 from ..core.security import get_current_user
 from ..ws import hub
 from .push import group_push_task
+from .email import group_email_task
 
 router = APIRouter()
 
@@ -131,6 +132,10 @@ async def send_message(
     }
     asyncio.get_event_loop().create_task(
         group_push_task(sender_id=user.id, payload=push_payload)
+    )
+    # Email notification to opt-in users (best-effort, background).
+    asyncio.get_event_loop().create_task(
+        group_email_task(sender_id=user.id, sender_name=(user.display_name or user.handle), text=text)
     )
     return payload
 

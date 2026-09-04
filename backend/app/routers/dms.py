@@ -8,6 +8,7 @@ from ..models import DmRoom, Family, Reaction, RoomMessage, User
 from ..core.security import get_current_user
 from ..ws import hub
 from .push import room_push_task
+from .email import room_email_task
 
 router = APIRouter()
 
@@ -250,6 +251,16 @@ async def send_room_message(
     }
     asyncio.get_event_loop().create_task(
         room_push_task(member_ids=member_ids, sender_id=user.id, payload=push_payload)
+    )
+    # Email notification to opt-in room members (best-effort, background).
+    asyncio.get_event_loop().create_task(
+        room_email_task(
+            member_ids=member_ids,
+            sender_id=user.id,
+            sender_name=(user.display_name or user.handle),
+            text=text,
+            room_label=fam_label,
+        )
     )
     return payload
 

@@ -30,6 +30,8 @@ const savingPassword = ref(false);
 const dnd = ref(false);
 const notifyMentions = ref(true);
 const notifyReplies = ref(true);
+const emailNotifications = ref(false);
+const emailAvailable = ref(false);
 const savingSettings = ref(false);
 
 const push = usePush();
@@ -59,7 +61,14 @@ onMounted(async () => {
     dnd.value = s.do_not_disturb;
     notifyMentions.value = s.notify_mentions;
     notifyReplies.value = s.notify_replies;
+    emailNotifications.value = s.email_notifications;
   } catch {}
+  try {
+    const e = await api.get("/api/email/status");
+    emailAvailable.value = e.enabled && e.has_email;
+  } catch {
+    emailAvailable.value = false;
+  }
   loadInvites();
   families.load().catch(() => {});
 });
@@ -136,6 +145,7 @@ async function saveSettings() {
       do_not_disturb: dnd.value,
       notify_mentions: notifyMentions.value,
       notify_replies: notifyReplies.value,
+      email_notifications: emailNotifications.value,
     });
     toast("Settings saved", "success");
   } catch (e) {
@@ -257,6 +267,25 @@ function inviteLink(code) {
               />
             </label>
             <p v-if="push.error" class="push-error">{{ push.error }}</p>
+          </div>
+
+          <!-- Email notifications (delivered to the profile email address) -->
+          <div class="push-block">
+            <label class="toggle-row">
+              <span class="push-label">
+                <span>Email notifications</span>
+                <small v-if="!emailAvailable && !me.email">Add an email in your profile to use this</small>
+                <small v-else-if="!emailAvailable">Not available on this server yet</small>
+                <small v-else-if="emailNotifications">On — new messages will be emailed to {{ me.email }}</small>
+                <small v-else>Off — you'll only get alerts in the app</small>
+              </span>
+              <input
+                type="checkbox"
+                class="toggle"
+                v-model="emailNotifications"
+                :disabled="!emailAvailable"
+              />
+            </label>
           </div>
 
           <label class="toggle-row">

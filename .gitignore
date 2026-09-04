@@ -17,6 +17,8 @@ data/
 # Uploaded files (avatars, attachments) live at the project root under
 # ./uploads (bind-mounted into the container at /app/uploads).
 uploads/
+# Mailpit (local dev email sink) captures — never commit.
+mailpit/
 
 # Frontend
 frontend/node_modules/

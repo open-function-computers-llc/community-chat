@@ -103,8 +103,31 @@ async def register(req: RegisterRequest, db=Depends(get_db)):
         invite.used_at = datetime.now(timezone.utc)
     db.add(user)
     db.commit()
-    db.refresh(user)
-    db.refresh(invite)
+
+    # Best-effort: welcome the newcomer (their own address) and tell the
+    # person who created the invite. Fire-and-forget; never blocks the response.
+    from .email import fire_invite_email, fire_welcome_email
+    from ..core.config import app_origin
+
+    link = f"{app_origin()}/login?code={invite.code}"
+    family_name = None
+    if invite.family_id:
+        from ..models import Family
+
+        fam = db.get(Family, invite.family_id)
+        family_name = fam.name if fam else None
+    if req.email:
+        fire_welcome_email(req.email, user.display_name or user.handle)
+    if invite.created_by:
+        creator = db.get(User, invite.created_by)
+        if creator and creator.email and "@" in creator.email:
+            fire_invite_email(
+                creator.email,
+                user.display_name or user.handle,
+                req.handle,
+                link,
+                family_name,
+            )
 
     token = create_access_token(user.id)
     return LoginResponse(token=token, user=public_user(user), is_new_user=True)
@@ -327,6 +350,7 @@ async def get_settings(user: User = Depends(get_current_user), db=Depends(get_db
         "do_not_disturb": settings.do_not_disturb,
         "notify_mentions": settings.notify_mentions,
         "notify_replies": settings.notify_replies,
+        "email_notifications": settings.email_notifications,
     }
 
 
@@ -334,6 +358,7 @@ class SettingsUpdate(BaseModel):
     do_not_disturb: bool
     notify_mentions: bool
     notify_replies: bool
+    email_notifications: bool
 
 
 @router.put("/me/settings")
@@ -345,11 +370,13 @@ async def put_settings(req: SettingsUpdate, user: User = Depends(get_current_use
     settings.do_not_disturb = req.do_not_disturb
     settings.notify_mentions = req.notify_mentions
     settings.notify_replies = req.notify_replies
+    settings.email_notifications = req.email_notifications
     db.commit()
     return {
         "do_not_disturb": settings.do_not_disturb,
         "notify_mentions": settings.notify_mentions,
         "notify_replies": settings.notify_replies,
+        "email_notifications": settings.email_notifications,
     }
 
 

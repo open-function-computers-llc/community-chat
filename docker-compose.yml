@@ -25,6 +25,16 @@ services:
       - VAPID_EMAIL=${VAPID_EMAIL:-mailto:admin@example.com}
       # Public origin of the site, used as the VAPID audience / deep-link base.
       - APP_ORIGIN=${APP_ORIGIN:-http://localhost:8983}
+      # Transactional email (SMTP). In dev these point at the local Mailpit
+      # sink (see .env.local). In production override with your provider
+      # (e.g. Resend): SMTP_HOST=smtp.resend.com SMTP_PORT=587
+      # SMTP_USERNAME=SMTP_PASSWORD=SMTP_FROM_ADDRESS=... SMTP_FROM_NAME=...
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS:-}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-Community Chat}
     volumes:
       # The SQLite DB lives in the project root under ./data so it's easy to
       # find and inspect (e.g. open ./data/chat.db). Bind-mounted at /app/data
@@ -36,4 +46,20 @@ services:
       # project root so they're easy to find/inspect. Bind-mounted at
       # /app/uploads (UPLOAD_DIR). Same uid-1000 ownership note as ./data.
       - ./uploads:/app/uploads
+    restart: unless-stopped
+
+  # Local email sink (dev only). The app points its SMTP client here so
+  # transactional email (invite, welcome, message notifications) is captured
+  # and inspectable in the web UI at http://localhost:3025 instead of leaving
+  # the machine. Not used in production — there the app talks to a real
+  # transactional provider over SMTP.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: community-chat-mailpit
+    ports:
+      - "3025:8025" # web UI -> host port 3025
+      - "1025:1025" # SMTP sink -> host port 1025 (app connects here)
+    volumes:
+      # Persist captured messages across container restarts.
+      - ./mailpit:/mailpit
     restart: unless-stopped

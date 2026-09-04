@@ -136,6 +136,7 @@ class DMSettings(Base):
     do_not_disturb: Mapped[bool] = mapped_column(Boolean, default=False)
     notify_mentions: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_replies: Mapped[bool] = mapped_column(Boolean, default=True)
+    email_notifications: Mapped[bool] = mapped_column(Boolean, default=False)
 
     user: Mapped["User"] = relationship("User", back_populates="dm_settings")
 
