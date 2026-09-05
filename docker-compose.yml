@@ -48,11 +48,11 @@ services:
       - ./uploads:/app/uploads
     restart: unless-stopped
 
-  # Local email sink (dev only). The app points its SMTP client here so
-  # transactional email (invite, welcome, message notifications) is captured
-  # and inspectable in the web UI at http://localhost:3025 instead of leaving
-  # the machine. Not used in production — there the app talks to a real
-  # transactional provider over SMTP.
+  # Local email sink (dev only). This file is the default dev experience
+  # (docker compose up), where transactional email is captured here instead of
+  # leaving the machine; inspect it at http://localhost:3025. Production uses
+  # docker-compose.prod.yml, which runs only `app` against a real SMTP
+  # provider (see that file + /chat/.env).
   mailpit:
     image: axllent/mailpit:latest
     container_name: community-chat-mailpit

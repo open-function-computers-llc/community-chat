@@ -40,6 +40,43 @@ with family, and they join from the "Join with invite" tab.
 > Data (SQLite DB + uploaded files) persists in the `chat-data` and
 > `chat-uploads` Docker volumes. Stop/start the container freely — nothing is lost.
 
+> **Local email (dev):** the dev compose also runs a **Mailpit** email sink, so
+> transactional email (invites, welcome, message notifications) is captured and
+> viewable at **http://localhost:3025** instead of leaving the machine. It is not
+> part of the production stack.
+
+## Production deploy
+
+The dev file (`docker-compose.yml`) is opinionated for local use (Mailpit sink,
+localhost). **Production uses `docker-compose.prod.yml`**, which runs only the
+`app` service against a real SMTP provider.
+
+1. Put the required values in `/chat/.env` on the host (never commit them):
+   ```
+   JWT_SECRET=<openssl rand -hex 32>
+   VAPID_PRIVATE_KEY=...      # raw 32-byte base64url
+   VAPID_PUBLIC_KEY=...       # raw 65-byte uncompressed point, base64url
+   VAPID_EMAIL=mailto:you@example.com
+   APP_ORIGIN=https://your-domain
+
+   # Real transactional SMTP provider (example: Resend)
+   SMTP_HOST=smtp.resend.com
+   SMTP_PORT=587
+   SMTP_USERNAME=resend
+   SMTP_PASSWORD=<your provider SMTP API key>
+   SMTP_FROM_ADDRESS=noreply@your-domain
+   SMTP_FROM_NAME=Community Chat
+   ```
+2. Start it:
+   ```bash
+   APP_GIT_HASH=$(git rev-parse --short HEAD) docker compose -f docker-compose.prod.yml up -d --build
+   ```
+
+The prod file uses `:?` defaults so it **refuses to start** if a core value is
+missing (JWT secret, VAPID keys, `APP_ORIGIN`). The `SMTP_*` values are
+**optional** — leave them empty to boot with email disabled, then add them and
+recreate the container to turn it on.
+
 ## Local development (no Docker)
 
 ```bash

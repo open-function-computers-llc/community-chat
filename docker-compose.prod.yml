@@ -1,0 +1,55 @@
+# Production compose file.
+#
+# Differs from the dev docker-compose.yml on purpose:
+#   - No Mailpit / local email sink. The app talks to a real transactional
+#     SMTP provider (see SMTP_* below + the values in /chat/.env).
+#   - The app is built from a specific image tag (see build.args / image) so a
+#     rebuild is an explicit, versioned step rather than an implicit one.
+#
+# The SMTP_* and APP_ORIGIN values are read from /chat/.env on the host
+# (docker compose auto-loads the .env in the project dir). SMTP_PASSWORD is the
+# one sensitive value — keep it in .env only, never in this file or in git.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        # Short git SHA shown in the app footer. Computed on the host at build
+        # time (see README / deploy notes). Falls back to "unknown".
+        APP_GIT_HASH: ${APP_GIT_HASH:-unknown}
+    image: community-chat:latest
+    container_name: community-chat
+    ports:
+      - "${PORT:-8983}:8983"
+    environment:
+      - PORT=8983
+      - HOST=0.0.0.0
+      - DATA_DIR=/app/data
+      - UPLOAD_DIR=/app/uploads
+      - FRONTEND_DIR=/app/frontend_dist
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required in production}
+      # Web Push (VAPID) — required for push notifications.
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:?VAPID_PRIVATE_KEY is required in production}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:?VAPID_PUBLIC_KEY is required in production}
+      - VAPID_EMAIL=${VAPID_EMAIL:?VAPID_EMAIL is required in production}
+      # Public origin of the site (deep links / VAPID audience).
+      - APP_ORIGIN=${APP_ORIGIN:?APP_ORIGIN is required in production}
+      # Transactional email (SMTP) — real provider, e.g. Resend. Optional:
+      # leave these empty to boot the app with email disabled, then add them
+      # and recreate the container to turn it on.
+      #   SMTP_HOST=smtp.resend.com SMTP_PORT=587 SMTP_USERNAME=resend
+      #   SMTP_PASSWORD=<key> SMTP_FROM_ADDRESS=noreply@your-domain
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS:-}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-Community Chat}
+    volumes:
+      # SQLite DB (./data/chat.db) — bind-mounted at /app/data (DATA_DIR).
+      # The container runs as uid 1000 (appuser); own ./data by that user.
+      - ./data:/app/data
+      # Uploaded files (avatars, attachments) — bind-mounted at /app/uploads.
+      - ./uploads:/app/uploads
+    restart: unless-stopped
