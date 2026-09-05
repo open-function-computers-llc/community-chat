@@ -11,7 +11,7 @@ from sqlalchemy import delete, func, select
 
 from .upload_utils import IMAGE_CONTENT_TYPES, delete_file, process_avatar, public_url
 
-from ..db import SessionLocal, get_db
+from ..db import SessionLocal, get_db, iso_utc
 from ..models import (
     DMSettings,
     File,
@@ -38,7 +38,7 @@ def public_user(user: User) -> dict:
         "family_id": user.family_id,
         "family_name": user.family.name if user.family else None,
         "is_admin": bool(user.is_admin),
-        "created_at": user.created_at.isoformat(),
+        "created_at": iso_utc(user.created_at),
     }
 
 
@@ -220,7 +220,7 @@ async def admin_list_users(
                 last_active = ts
         base["group_message_count"] = g_count
         base["room_message_count"] = room_sent.get(u.id, 0)
-        base["last_active_at"] = last_active.isoformat() if last_active else None
+        base["last_active_at"] = iso_utc(last_active)
         out.append(base)
     return out
 

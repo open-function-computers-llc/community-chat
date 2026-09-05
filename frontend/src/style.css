@@ -25,9 +25,20 @@ html, body {
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  /* iOS Safari: let the body scroll when content is taller than the viewport
+     (a fallback for the overflow: hidden views below). */
+  overscroll-behavior: none;
 }
 
-#app { height: 100vh; display: flex; flex-direction: column; }
+#app {
+  display: flex;
+  flex-direction: column;
+  /* 100vh ignores the iOS browser URL bar + the standalone PWA home-indicator
+     safe area, so it is *larger* than the visible area and clips bottom
+     content. 100dvh tracks the real (dynamic) viewport height. */
+  height: 100vh;
+  height: 100dvh;
+}
 
 button {
   font: inherit;

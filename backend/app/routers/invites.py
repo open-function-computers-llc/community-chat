@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from ..db import SessionLocal, get_db
+from ..db import SessionLocal, get_db, iso_utc
 from ..models import Family, Invite, User
 from ..core.security import get_current_user, require_admin
 
@@ -52,8 +52,8 @@ def serialize(invite: Invite, db) -> InviteOut:
         note=invite.note,
         family_id=invite.family_id,
         family_name=family_name,
-        created_at=invite.created_at.isoformat(),
-        used_at=invite.used_at.isoformat() if invite.used_at else None,
+        created_at=iso_utc(invite.created_at),
+        used_at=iso_utc(invite.used_at),
     )
 
 

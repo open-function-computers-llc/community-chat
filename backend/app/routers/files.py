@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy import select
 
-from ..db import get_db
+from ..db import get_db, iso_utc
 from ..models import File as FileModel, User
 from ..core.security import get_current_user
 from .upload_utils import delete_file as delete_uploaded_file, public_url, save_upload
@@ -34,7 +34,7 @@ async def my_files(user: User = Depends(get_current_user), db=Depends(get_db)):
             "content_type": f.content_type,
             "size": f.size,
             "url": public_url(f.storage_name),
-            "created_at": f.created_at.isoformat(),
+            "created_at": iso_utc(f.created_at),
         }
         for f in rows
     ]

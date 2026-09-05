@@ -108,15 +108,23 @@ async function submit() {
 .login-page {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  /* When the card is taller than the viewport (e.g. the register tab on a
+     small iPhone) this scrolls it instead of clipping the bottom. */
+  overflow-y: auto;
+  /* Keep the card clear of the iOS safe area (URL bar / home indicator). */
+  padding: calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
+    calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));
   background: radial-gradient(circle at 50% 30%, #1e1b4b 0%, var(--bg) 60%);
 }
 .login-card {
   width: 100%;
   max-width: 420px;
   padding: 32px;
+  /* Don't grow the box beyond the viewport so the page scrolls, not the card. */
+  margin: auto;
 }
 .login-header { text-align: center; margin-bottom: 24px; }
 .login-logo { font-size: 48px; }

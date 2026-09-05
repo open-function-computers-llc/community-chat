@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
+import { timeStr } from "@/composables/useTime";
 import Avatar from "./Avatar.vue";
 import Reactions from "./Reactions.vue";
 import Modal from "./Modal.vue";
@@ -59,16 +60,6 @@ function initials(user) {
 
 function openLightbox() {
   lightbox.value = true;
-}
-
-function timeStr(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 </script>
 

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 
-from ..db import get_db
+from ..db import get_db, iso_utc
 from ..models import GroupMessage, Reaction, User
 from ..core.security import get_current_user
 from ..ws import hub
@@ -51,8 +51,8 @@ def message_payload(db, msg: GroupMessage) -> dict:
         "file_name": msg.file_name,
         "file_content_type": msg.file_content_type,
         "reply_to_id": msg.reply_to_id,
-        "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
-        "created_at": msg.created_at.isoformat(),
+        "edited_at": iso_utc(msg.edited_at),
+        "created_at": iso_utc(msg.created_at),
         "reactions": reaction_payloads(db, msg.id),
     }
     if msg.reply_to_id:
@@ -66,9 +66,9 @@ def message_payload(db, msg: GroupMessage) -> dict:
                     "display_name": original.author.display_name or original.author.handle,
                     "avatar_url": original.author.avatar_url,
                 },
-                "text": (original.text or "")[:140],
-                "created_at": original.created_at.isoformat(),
-            }
+                    "text": (original.text or "")[:140],
+                    "created_at": iso_utc(original.created_at),
+                }
     return payload
 
 

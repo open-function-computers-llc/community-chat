@@ -128,11 +128,15 @@ onBeforeUnmount(() => {
 <style scoped>
 .app-shell {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
 }
 .app-main {
   flex: 1;
+  /* min-height: 0 lets a flex child actually shrink so its inner overflow-y
+     (the view's scrollable content) works instead of the content being clipped. */
+  min-height: 0;
   overflow: hidden;
   display: flex;
 }

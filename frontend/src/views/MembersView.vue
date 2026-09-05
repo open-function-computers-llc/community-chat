@@ -6,6 +6,7 @@ import { useChatStore } from "@/stores/chat";
 import { useFamiliesStore } from "@/stores/families";
 import { api } from "@/api";
 import { toast } from "@/composables/useToasts";
+import { dateOnly, dateAndTime } from "@/composables/useTime";
 import Sidebar from "@/components/Sidebar.vue";
 import Avatar from "@/components/Avatar.vue";
 
@@ -37,13 +38,11 @@ async function loadMembers() {
 }
 
 function timeStr(iso) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+  return dateOnly(iso);
 }
 
 function lastActiveStr(iso) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return dateAndTime(iso);
 }
 
 function familyBadge(u) {

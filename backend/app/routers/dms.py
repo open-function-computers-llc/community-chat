@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 
-from ..db import get_db
+from ..db import get_db, iso_utc
 from ..models import DmRoom, Family, Reaction, RoomMessage, User
 from ..core.security import get_current_user
 from ..ws import hub
@@ -57,7 +57,7 @@ def _message_payload(db, msg: RoomMessage) -> dict:
         "file_url": msg.file_url,
         "file_name": msg.file_name,
         "file_content_type": msg.file_content_type,
-        "created_at": msg.created_at.isoformat(),
+        "created_at": iso_utc(msg.created_at),
         "reactions": _reactions(db, msg.id),
     }
 
@@ -115,7 +115,7 @@ async def list_rooms(user: User = Depends(get_current_user), db=Depends(get_db))
                 "families": other_families,
                 "families_all": families,
                 "last_message": _message_payload(db, last_msg) if last_msg else None,
-                "last_at": last_msg.created_at.isoformat() if last_msg else None,
+                "last_at": iso_utc(last_msg.created_at) if last_msg else None,
             }
         )
     result.sort(key=lambda c: c["last_at"] or "", reverse=True)

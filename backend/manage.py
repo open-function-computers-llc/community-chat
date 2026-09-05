@@ -41,7 +41,7 @@ os.environ.setdefault(
     f"sqlite:///{Path(__file__).resolve().parent / 'data' / 'chat.db'}",
 )
 
-from app.db import Base, SessionLocal, engine  # noqa: E402
+from app.db import Base, SessionLocal, engine, iso_utc  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.models import (  # noqa: E402
     DMSettings,
@@ -109,7 +109,7 @@ def _invite_active(inv: Invite) -> bool:
 
 
 def _fmt_ts(dt) -> str | None:
-    return dt.isoformat() if dt else None
+    return iso_utc(dt)
 
 
 def _public_user(u: User) -> dict:

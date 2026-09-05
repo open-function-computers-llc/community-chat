@@ -2,6 +2,7 @@
 import { ref, onMounted } from "vue";
 import { storeToRefs } from "pinia";
 import { useAuthStore } from "@/stores/auth";
+import { fileDate } from "@/composables/useTime";
 import Sidebar from "@/components/Sidebar.vue";
 
 const auth = useAuthStore();
@@ -20,7 +21,7 @@ function isImage(f) {
 }
 
 function timeStr(iso) {
-  return new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  return fileDate(iso);
 }
 </script>
 

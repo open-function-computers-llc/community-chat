@@ -94,14 +94,18 @@ async function save() {
 .profile-page {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  overflow-y: auto;
+  padding: calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
+    calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));
 }
 .profile-card {
   width: 100%;
   max-width: 480px;
   padding: 32px;
+  margin: auto;
 }
 .profile-card h1 { font-size: 22px; }
 .subtitle { color: var(--text-muted); margin: 6px 0 20px; font-size: 14px; }

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from ..db import get_db
+from ..db import get_db, iso_utc
 from ..models import Family, User
 from ..core.security import get_current_user, require_admin
 from .upload_utils import delete_file, IMAGE_CONTENT_TYPES, process_avatar, public_url
@@ -39,7 +39,7 @@ def serialize(db, family: Family) -> FamilyOut:
         description=family.description,
         avatar_url=family.avatar_url,
         member_count=members,
-        created_at=family.created_at.isoformat(),
+        created_at=iso_utc(family.created_at),
     )
 
 

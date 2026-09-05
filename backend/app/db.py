@@ -43,6 +43,21 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def iso_utc(dt: datetime | None) -> str | None:
+    """Serialize a datetime as an ISO-8601 UTC string ending in 'Z'.
+
+    Timestamps are stored UTC (tz-aware via utcnow). We emit an explicit Z
+    suffix so the browser always parses the value as UTC and can localize it
+    to the viewer's timezone, rather than guessing. A naive datetime is
+    coerced to UTC first so the output is unambiguous.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 class User(Base):
     __tablename__ = "users"
 
