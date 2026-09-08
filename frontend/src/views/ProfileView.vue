@@ -96,7 +96,8 @@ async function save() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* Centered via the card's margin:auto (see LoginView) — not justify-content,
+     so the top stays reachable when the form is taller than the viewport. */
   overflow-y: auto;
   padding: calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
     calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));

@@ -110,9 +110,11 @@ async function submit() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* No justify-content: center — centering a flex item that overflows clips its
+     TOP (unreachable). The card uses margin:auto instead, which centers it when
+     it fits but pins it to the top when it's taller than the viewport. */
   /* When the card is taller than the viewport (e.g. the register tab on a
-     small iPhone) this scrolls it instead of clipping the bottom. */
+     small iPhone) this scrolls it instead of clipping. */
   overflow-y: auto;
   /* Keep the card clear of the iOS safe area (URL bar / home indicator). */
   padding: calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
@@ -123,7 +125,9 @@ async function submit() {
   width: 100%;
   max-width: 420px;
   padding: 32px;
-  /* Don't grow the box beyond the viewport so the page scrolls, not the card. */
+  /* Centers the card when it's short; when it's taller than the viewport this
+     (instead of justify-content:center) keeps the top reachable and lets the
+     page scroll to the bottom. */
   margin: auto;
 }
 .login-header { text-align: center; margin-bottom: 24px; }
