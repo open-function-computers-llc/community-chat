@@ -77,6 +77,54 @@ missing (JWT secret, VAPID keys, `APP_ORIGIN`). The `SMTP_*` values are
 **optional** — leave them empty to boot with email disabled, then add them and
 recreate the container to turn it on.
 
+## Admin CLI
+
+`backend/manage.py` is a maintenance CLI for the operations the admin UI
+performs, usable without a browser or a known admin password. It opens the app's
+real database (the same `DATA_DIR`/`DATABASE_URL` the server uses), so it always
+operates on the live data. Run it **inside the container** (prod) or from the
+`backend/` dir locally:
+
+```bash
+# Prod (from the host) — runs against the container's live DB
+docker exec community-chat python manage.py list-members
+
+# Local dev (from backend/)
+python manage.py list-members --json
+```
+
+| Command | What it does |
+| --- | --- |
+| `list-members` | Roster + activity stats (group/room counts, last active). `--all` includes inactive. |
+| `delete-member <id\|handle>` | Hard-delete a member and all their messages, reactions, and files. |
+| `set-admin <id\|handle>` | Grant/revoke the admin role (`--role admin\|member`). |
+| `create-invite` | Print a shareable invite code. `--max-uses`, `--note`, `--family <name\|id>`. |
+| `list-invites` | List invites. `--all` includes expired. |
+| `revoke-invite <id>` | Revoke (or delete) an invite. |
+| `list-families` | Families with member counts. |
+| `create-family <name>` | Create a family (`--description`). |
+| `assign-member <handle> <family\|0>` | Put a user in a family; `0` removes them. |
+| `reset-admin-password` | Recover the admin password (`--handle`, `--password`, or `--generate`). |
+
+Notes:
+- `--json` on any command prints machine-readable output.
+- Destructive actions (`delete-member`, `revoke-invite`, granting admin) prompt
+  for confirmation; add `--yes` to skip (e.g. in a script).
+- Lookups accept a numeric id **or** a handle.
+- `reset-admin-password --generate` prints a new random password (the old one is
+  gone — save the printed value).
+
+### Recovering the admin password
+
+If the seeded admin password is unknown (it's only logged once, on first boot):
+
+```bash
+docker exec community-chat python manage.py reset-admin-password --generate
+```
+
+Set a specific one instead with `--password '...'` (or `--handle` if the admin
+handle isn't `admin`).
+
 ## Local development (no Docker)
 
 ```bash
@@ -116,6 +164,12 @@ real data file is ever touched.
 | `DATA_DIR`       | `backend/data`    | Where the SQLite file lives          |
 | `UPLOAD_DIR`     | `backend/uploads` | Where attachments are stored         |
 | `FRONTEND_DIR`   | auto              | Where the built frontend lives       |
+| `VAPID_PRIVATE_KEY` / `VAPID_PUBLIC_KEY` / `VAPID_EMAIL` | — | Web push (VAPID). Push is disabled without them. |
+| `APP_ORIGIN`     | `http://localhost:8983` | Public origin for deep links / VAPID audience (set to your domain in prod) |
+| `SMTP_HOST`      | *(empty)*         | Transactional email SMTP host; empty = email disabled |
+| `SMTP_PORT`      | `587`             | SMTP port (`465` uses implicit TLS)  |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | *(empty)* | SMTP auth (some providers require it) |
+| `SMTP_FROM_ADDRESS` / `SMTP_FROM_NAME` | *(empty)* | Sender address + name for outgoing email |
 
 The seeder runs on startup and is **idempotent** — it only creates the admin if
 no user with that handle exists, so it never overwrites an existing account.
