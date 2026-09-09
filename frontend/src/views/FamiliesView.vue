@@ -112,6 +112,14 @@ function activeInviteFor(f) {
   );
 }
 
+// Total remaining uses across a family's active invites (0 if none). Only
+// admins can see the invite list, so this is 0 for everyone else.
+function openInviteUses(f) {
+  return invites.value
+    .filter((i) => i.family_id === f.id && i.is_active)
+    .reduce((sum, i) => sum + (i.max_uses - i.times_used), 0);
+}
+
 function startInvite(f) {
   if (invitingFor.value === f.id) {
     cancelInvite();
@@ -386,8 +394,14 @@ async function remove(f) {
                 </li>
               </ul>
 
-              <!-- No users yet (e.g. an invite was sent but nobody's joined). -->
-              <p v-else class="no-members">No users yet — invite someone to fill this family.</p>
+              <!-- No users yet (e.g. an invite was sent but nobody's joined).
+                   Admins see the number of open invite slots. -->
+              <p v-else class="no-members">
+                <template v-if="openInviteUses(f) > 0">
+                  No users yet — up to {{ openInviteUses(f) }} family member{{ openInviteUses(f) === 1 ? "" : "s" }} can join this family.
+                </template>
+                <template v-else>No users yet — invite someone to fill this family.</template>
+              </p>
             </div>
             <div class="family-actions">
               <button
@@ -576,8 +590,8 @@ async function remove(f) {
 .member-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .member-detail { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .member-detail li { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
-.member-detail a { color: var(--accent); text-decoration: none; word-break: break-all; }
-.member-detail a:hover { text-decoration: underline; }
+.member-detail a { color: #fff; text-decoration: none; word-break: break-all; }
+.member-detail a:hover { text-decoration: underline; color: var(--accent); }
 .member-detail-label { flex-shrink: 0; }
 .family-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .family-actions .btn.active { background: var(--accent-soft); color: var(--accent-hover); border-color: var(--accent); }
