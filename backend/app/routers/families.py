@@ -12,12 +12,23 @@ from .upload_utils import delete_file, IMAGE_CONTENT_TYPES, process_avatar, publ
 router = APIRouter()
 
 
+class FamilyMember(BaseModel):
+    id: int
+    display_name: str
+    handle: str
+    avatar_url: str | None
+    bio: str | None
+    phone: str | None
+    email: str | None
+
+
 class FamilyOut(BaseModel):
     id: int
     name: str
     description: str | None
     avatar_url: str | None
     member_count: int
+    members: list[FamilyMember]
     created_at: str
 
 
@@ -32,13 +43,30 @@ class FamilyUpdateRequest(BaseModel):
 
 
 def serialize(db, family: Family) -> FamilyOut:
-    members = db.query(User).filter(User.family_id == family.id, User.is_active == True).count()
+    members = (
+        db.query(User)
+        .filter(User.family_id == family.id, User.is_active == True)
+        .order_by(User.display_name)
+        .all()
+    )
     return FamilyOut(
         id=family.id,
         name=family.name,
         description=family.description,
         avatar_url=family.avatar_url,
-        member_count=members,
+        member_count=len(members),
+        members=[
+            FamilyMember(
+                id=u.id,
+                display_name=u.display_name or u.handle,
+                handle=u.handle,
+                avatar_url=u.avatar_url,
+                bio=u.bio,
+                phone=u.phone,
+                email=u.email,
+            )
+            for u in members
+        ],
         created_at=iso_utc(family.created_at),
     )
 

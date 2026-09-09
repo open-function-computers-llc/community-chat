@@ -8,6 +8,8 @@ import { useChatStore } from "@/stores/chat";
 import { api } from "@/api";
 import { toast } from "@/composables/useToasts";
 import Sidebar from "@/components/Sidebar.vue";
+import Modal from "@/components/Modal.vue";
+import Avatar from "@/components/Avatar.vue";
 
 const families = useFamiliesStore();
 const auth = useAuthStore();
@@ -15,6 +17,13 @@ const chat = useChatStore();
 const router = useRouter();
 const { me } = storeToRefs(auth);
 const isAdmin = computed(() => !!me.value?.is_admin);
+
+// tel: link for a stored phone number (strip non-digits so it dials cleanly).
+function telHref(phone) {
+  if (!phone) return null;
+  const digits = String(phone).replace(/[^\d+]/g, "");
+  return digits ? `tel:${digits}` : null;
+}
 const mobileSidebar = ref(false);
 const chattingFor = ref(null);
 
@@ -47,14 +56,60 @@ const saving = ref(false);
 const uploadingFor = ref(null);
 const fileInputs = ref({});
 
-// Per-family inline invite creation (admin only).
+function setFileInput(id, el) {
+  if (el) fileInputs.value[id] = el;
+}
+
+// Avatar zoom modal (reuses the same pattern as the chat's MessageBubble).
+// Anyone can open it for a family's avatar, but only your own family's
+// avatar uses the upload flow (clicking your own family's avatar opens the
+// file picker; everyone else's opens the zoom modal).
+const avatarModal = ref(false);
+const zoomFamily = ref(null); // { name, avatar_url }
+// Which family's member list is expanded (avatar + name + phone/bio/email).
+const expandedMembersFor = ref(null);
+
+function toggleMembers(f) {
+  expandedMembersFor.value = expandedMembersFor.value === f.id ? null : f.id;
+}
+
+function onAvatarClick(f) {
+  if (f.id === me.value?.family_id) {
+    fileInputs.value[f.id]?.click();
+  } else {
+    zoomFamily.value = { name: f.name, avatar_url: f.avatar_url };
+    avatarModal.value = true;
+  }
+}
+
+// Per-family inline invite management (admin only). We track one active invite
+// per family and reuse it (instead of creating a new code every time), so an
+// admin doesn't accidentally generate a pile of unused codes for one family.
 const invitingFor = ref(null);
 const inviteUses = ref(1);
-const inviteResult = ref(null); // { familyId, code, link, uses }
+const inviteResult = ref(null); // { familyId, code, link, uses, id?, fresh? }
 const creatingInvite = ref(false);
+const invites = ref([]); // all invites (admin) from /api/invites
 
 function inviteLink(code) {
   return `${window.location.origin}/login?code=${code}`;
+}
+
+async function loadInvites() {
+  try {
+    invites.value = await api.get("/api/invites");
+  } catch {
+    /* non-admins get only their own invite; non-admins don't use this UI */
+  }
+}
+
+// The currently-active invite for a family (if any).
+function activeInviteFor(f) {
+  return (
+    invites.value.find(
+      (i) => i.family_id === f.id && i.is_active && i.times_used < i.max_uses
+    ) || null
+  );
 }
 
 function startInvite(f) {
@@ -62,8 +117,21 @@ function startInvite(f) {
     cancelInvite();
     return;
   }
-  inviteResult.value = null;
-  inviteUses.value = 1;
+  const existing = activeInviteFor(f);
+  if (existing) {
+    // Reuse the family's existing active invite rather than creating a new one.
+    inviteResult.value = {
+      id: existing.id,
+      familyId: f.id,
+      code: existing.code,
+      link: inviteLink(existing.code),
+      uses: existing.max_uses,
+      fresh: false,
+    };
+  } else {
+    inviteResult.value = null;
+    inviteUses.value = 1;
+  }
   invitingFor.value = f.id;
 }
 
@@ -71,6 +139,21 @@ function cancelInvite() {
   invitingFor.value = null;
   inviteResult.value = null;
   inviteUses.value = 1;
+}
+
+// Revoke the invite just shown (drops it; a new one can be created after).
+async function revokeInvite(f) {
+  const inv = activeInviteFor(f);
+  if (!inv) return;
+  if (!confirm(`Revoke the ${f.name} invite ${inv.code}?`)) return;
+  try {
+    await api.del(`/api/invites/${inv.id}`);
+    inviteResult.value = null;
+    await loadInvites();
+    toast("Invite revoked", "success");
+  } catch (e) {
+    toast(e.message, "error");
+  }
 }
 
 async function createInvite(f) {
@@ -83,12 +166,15 @@ async function createInvite(f) {
       note: `for ${f.name}`,
     });
     inviteResult.value = {
+      id: invite.id,
       familyId: f.id,
       code: invite.code,
       link: inviteLink(invite.code),
       uses: invite.max_uses,
+      fresh: true,
     };
     toast("Invite created", "success");
+    await loadInvites();
   } catch (e) {
     toast(e.message, "error");
   } finally {
@@ -103,6 +189,7 @@ async function copyText(text, label) {
 
 onMounted(async () => {
   await families.load(true).catch((e) => toast(e.message, "error"));
+  if (isAdmin.value) loadInvites();
 });
 
 async function create() {
@@ -225,25 +312,82 @@ async function remove(f) {
             </div>
           </div>
           <div v-else class="family-body">
-            <label class="family-avatar-wrap">
-              <input
-                type="file"
-                accept="image/*"
-                style="display: none"
-                @change="onAvatarFile(f, $event)"
-              />
+            <!-- Hidden file input; opened programmatically when the user clicks
+                 their OWN family's avatar. Other families' avatars open the
+                 zoom modal instead (see onAvatarClick). -->
+            <input
+              v-if="isAdmin || f.id === me?.family_id"
+              :ref="(el) => setFileInput(f.id, el)"
+              type="file"
+              accept="image/*"
+              style="display: none"
+              @change="onAvatarFile(f, $event)"
+            />
+            <div
+              class="family-avatar-wrap"
+              :class="{
+                clickable: uploadingFor !== f.id && (isAdmin || f.id === me?.family_id),
+                zoomable: !(isAdmin || f.id === me?.family_id),
+              }"
+              role="button"
+              :aria-label="
+                isAdmin || f.id === me?.family_id
+                  ? `Change ${f.name}'s photo`
+                  : `View ${f.name}'s avatar`
+              "
+              @click="onAvatarClick(f)"
+            >
               <div class="family-avatar">
                 <img v-if="f.avatar_url" :src="f.avatar_url" :alt="f.name" />
                 <span v-else class="avatar-placeholder">🏠</span>
-                <span class="avatar-hint">
+                <span
+                  v-if="
+                    isAdmin || f.id === me?.family_id
+                  "
+                  class="avatar-hint"
+                >
                   {{ uploadingFor === f.id ? "Uploading…" : f.avatar_url ? "Change" : "Add" }}
                 </span>
               </div>
-            </label>
+            </div>
             <div class="family-info">
               <div class="family-name">{{ f.name }}</div>
               <div v-if="f.description" class="family-desc">{{ f.description }}</div>
-              <div class="family-meta">{{ f.member_count }} member{{ f.member_count === 1 ? "" : "s" }}</div>
+              <div class="family-meta">
+                <span>{{ f.member_count }} member{{ f.member_count === 1 ? "" : "s" }}</span>
+                <button
+                  v-if="f.member_count > 0"
+                  class="members-toggle"
+                  :class="{ active: expandedMembersFor === f.id }"
+                  @click="toggleMembers(f)"
+                >
+                  {{ expandedMembersFor === f.id ? "Hide members" : "Show members" }}
+                </button>
+              </div>
+
+              <!-- Member roster: avatar + name always; phone/bio/email on expand. -->
+              <ul v-if="f.member_count > 0" class="member-list" :class="{ open: expandedMembersFor === f.id }">
+                <li v-for="u in f.members" :key="u.id" class="member-row">
+                  <Avatar :user="u" size="sm" class="member-avatar" />
+                  <div class="member-identity">
+                    <div class="member-name">{{ u.display_name }}</div>
+                    <ul v-if="expandedMembersFor === f.id" class="member-detail">
+                      <li v-if="u.phone">
+                        <span class="member-detail-label">📞</span>
+                        <a :href="telHref(u.phone)">{{ u.phone }}</a>
+                      </li>
+                      <li v-if="u.bio"><span class="member-detail-label">👤</span><span>{{ u.bio }}</span></li>
+                      <li v-if="u.email">
+                        <span class="member-detail-label">✉️</span>
+                        <a :href="`mailto:${u.email}`">{{ u.email }}</a>
+                      </li>
+                    </ul>
+                  </div>
+                </li>
+              </ul>
+
+              <!-- No users yet (e.g. an invite was sent but nobody's joined). -->
+              <p v-else class="no-members">No users yet — invite someone to fill this family.</p>
             </div>
             <div class="family-actions">
               <button
@@ -260,9 +404,11 @@ async function remove(f) {
                 <button
                   class="btn btn-ghost btn-sm"
                   :class="{ active: invitingFor === f.id }"
+                  :title="activeInviteFor(f) ? 'Has an active invite' : 'Create an invite'"
                   @click="startInvite(f)"
                 >
                   ✉️ Invite
+                  <span v-if="activeInviteFor(f)" class="invite-badge" title="Active invite">·</span>
                 </button>
                 <button class="btn btn-ghost btn-sm danger-text" @click="remove(f)">Delete</button>
               </template>
@@ -276,6 +422,9 @@ async function remove(f) {
               <button class="btn btn-ghost btn-sm" @click="cancelInvite">Close</button>
             </div>
             <div v-if="!inviteResult" class="invite-prompt">
+              <p class="invite-prompt-note">
+                No active invite for {{ f.name }} yet. Create one to share.
+              </p>
               <label class="invite-uses-label">
                 Times it can be used
                 <input
@@ -291,6 +440,9 @@ async function remove(f) {
               </button>
             </div>
             <div v-else class="invite-result">
+              <p class="invite-result-note">
+                {{ inviteResult.fresh ? "New invite created." : "Reusing the family's active invite." }}
+              </p>
               <div class="invite-code-row">
                 <code class="invite-code">{{ inviteResult.code }}</code>
                 <button class="btn btn-ghost btn-sm" @click="copyText(inviteResult.code, 'Code')">Copy code</button>
@@ -300,12 +452,32 @@ async function remove(f) {
                 <code class="invite-link">{{ inviteResult.link }}</code>
                 <button class="btn btn-ghost btn-sm" @click="copyText(inviteResult.link, 'Link')">Copy link</button>
               </div>
-              <p class="invite-uses-note">{{ inviteResult.uses }} use{{ inviteResult.uses === 1 ? "" : "s" }} · new members join {{ f.name }}</p>
+              <div class="invite-result-foot">
+                <p class="invite-uses-note">{{ inviteResult.uses }} use{{ inviteResult.uses === 1 ? "" : "s" }} · new members join {{ f.name }}</p>
+                <button
+                  class="btn btn-ghost btn-sm danger-text"
+                  @click="revokeInvite(f)"
+                >
+                  Revoke
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </section>
+
+    <!-- Zoom a family's avatar (for families that aren't yours). Mirrors the
+         avatar-zoom modal in the chat's MessageBubble. -->
+    <Modal v-model:open="avatarModal" :title="zoomFamily?.name || 'Family avatar'">
+      <img
+        v-if="zoomFamily?.avatar_url"
+        :src="zoomFamily.avatar_url"
+        class="family-avatar-zoom"
+        :alt="zoomFamily?.name || 'family avatar'"
+      />
+      <div v-else class="family-avatar-zoom-placeholder">🏠</div>
+    </Modal>
   </div>
 </template>
 
@@ -330,10 +502,14 @@ async function remove(f) {
 .family-body { display: flex; align-items: center; gap: 16px; }
 .family-avatar-wrap {
   position: relative;
-  cursor: pointer;
+  cursor: default;
   flex-shrink: 0;
   display: inline-block;
+  border-radius: var(--radius);
+  -webkit-tap-highlight-color: transparent;
 }
+.family-avatar-wrap.clickable { cursor: pointer; }
+.family-avatar-wrap.zoomable { cursor: zoom-in; }
 .family-avatar {
   width: 64px;
   height: 64px;
@@ -347,7 +523,8 @@ async function remove(f) {
   border: 1px solid var(--border);
   transition: border-color 0.15s;
 }
-.family-avatar-wrap:hover .family-avatar { border-color: var(--accent); }
+.family-avatar-wrap.clickable:hover .family-avatar,
+.family-avatar-wrap.zoomable:hover .family-avatar { border-color: var(--accent); }
 .family-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .avatar-placeholder { font-size: 28px; }
 .avatar-hint {
@@ -366,7 +543,42 @@ async function remove(f) {
 .family-info { flex: 1; min-width: 0; }
 .family-name { font-weight: 600; font-size: 16px; }
 .family-desc { font-size: 13px; color: var(--text-muted); margin-top: 4px; white-space: pre-wrap; }
-.family-meta { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.family-meta { font-size: 12px; color: var(--text-muted); margin-top: 6px; display: flex; align-items: center; gap: 10px; }
+.members-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.members-toggle.active { color: var(--text-muted); text-decoration: none; }
+.no-members { font-size: 13px; color: var(--text-muted); margin-top: 8px; font-style: italic; }
+.member-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.member-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+.member-avatar { flex-shrink: 0; }
+.member-identity { min-width: 0; flex: 1; }
+.member-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-detail { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.member-detail li { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+.member-detail a { color: var(--accent); text-decoration: none; word-break: break-all; }
+.member-detail a:hover { text-decoration: underline; }
+.member-detail-label { flex-shrink: 0; }
 .family-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .family-actions .btn.active { background: var(--accent-soft); color: var(--accent-hover); border-color: var(--accent); }
 .edit-row { display: flex; flex-direction: column; gap: 10px; }
@@ -383,6 +595,10 @@ async function remove(f) {
 .invite-panel-head { display: flex; align-items: center; justify-content: space-between; }
 .invite-panel-title { font-weight: 600; font-size: 14px; }
 .invite-prompt { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.invite-prompt-note { width: 100%; margin: 0; font-size: 13px; color: var(--text-muted); }
+.invite-result-note { margin: 0; font-size: 13px; color: var(--text-muted); }
+.invite-result-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.invite-badge { color: var(--success); font-weight: 700; margin-left: 2px; }
 .invite-uses-label {
   display: flex;
   flex-direction: column;
@@ -422,6 +638,27 @@ async function remove(f) {
   border-radius: 6px;
 }
 .invite-uses-note { font-size: 12px; color: var(--text-muted); margin: 0; }
+
+/* Avatar zoom modal (other families) — mirrors MessageBubble's avatar-zoom. */
+.family-avatar-zoom {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  border-radius: var(--radius);
+  display: block;
+}
+.family-avatar-zoom-placeholder {
+  width: 220px;
+  height: 220px;
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 96px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+}
 
 @media (max-width: 768px) {
   .mobile-toggle { display: inline-block; font-size: 18px; color: var(--text); }
