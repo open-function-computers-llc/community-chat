@@ -44,26 +44,36 @@ async function onFileSelected(e) {
     fileInput.value.value = "";
     return;
   }
+  // Always start with no attachment so a thumbnail only appears once the
+  // upload has actually succeeded and returned a URL.
+  attachFile.value = null;
   uploading.value = true;
   try {
     const fd = new FormData();
     fd.append("file", file);
     const result = await api.upload("/api/files/upload", fd);
-    attachFile.value = result;
+    if (result && result.url) attachFile.value = result;
+    else toast("Upload failed — no file returned", "error");
   } catch (err) {
     toast(err.message || "Upload failed", "error");
   } finally {
+    // Reset in case the upload was interrupted (e.g. page hidden/aborted) and
+    // the await never settled, which would otherwise leave the spinner stuck.
     uploading.value = false;
     fileInput.value.value = "";
   }
 }
 
 async function submit() {
+  if (uploading.value) return;
   const trimmed = text.value.trim();
-  if (!trimmed && !attachFile.value) return;
+  const fileUrl = attachFile.value?.url;
+  // Never send an empty message: guard on the real file URL, not just the
+  // presence of the object, so a stale/partial attachment can't slip through.
+  if (!trimmed && !fileUrl) return;
   const payload = {
     text: trimmed,
-    file_url: attachFile.value?.url,
+    file_url: fileUrl,
     file_name: attachFile.value?.filename,
     file_content_type: attachFile.value?.content_type,
   };
