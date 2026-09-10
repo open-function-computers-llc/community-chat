@@ -58,12 +58,12 @@ export const useChatStore = defineStore("chat", {
     _deleteGroupMessage(id) {
       this.groupMessages = this.groupMessages.filter((m) => m.id !== id);
     },
-    async sendGroupMessage({ text, fileUrl, fileName, fileContentType, replyToId }) {
+    async sendGroupMessage({ text, file_url, file_name, file_content_type, replyToId }) {
       const message = await api.post("/api/messages", {
         text,
-        file_url: fileUrl,
-        file_name: fileName,
-        file_content_type: fileContentType,
+        file_url,
+        file_name,
+        file_content_type,
         reply_to_id: replyToId,
       });
       this._addGroupMessage(message);
@@ -158,12 +158,12 @@ export const useChatStore = defineStore("chat", {
         room.last_at = message.created_at;
       }
     },
-    async sendRoomMessage(roomId, { text, fileUrl, fileName, fileContentType }) {
+    async sendRoomMessage(roomId, { text, file_url, file_name, file_content_type }) {
       const message = await api.post(`/api/dms/rooms/${roomId}`, {
         text,
-        file_url: fileUrl,
-        file_name: fileName,
-        file_content_type: fileContentType,
+        file_url,
+        file_name,
+        file_content_type,
       });
       if (!this.roomMessages[roomId]) this.roomMessages[roomId] = [];
       if (!this.roomMessages[roomId].some((m) => m.id === message.id)) {
