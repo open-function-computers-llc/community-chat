@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
 import { api } from "@/api";
+import { toast } from "@/composables/useToasts";
 
 const props = defineProps({
   message: Object,
@@ -39,7 +40,7 @@ async function onFileSelected(e) {
   const file = e.target.files?.[0];
   if (!file) return;
   if (file.size > 10 * 1024 * 1024) {
-    alert("File too large (max 10 MB)");
+    toast("File too large (max 10 MB)", "error");
     fileInput.value.value = "";
     return;
   }
@@ -50,7 +51,7 @@ async function onFileSelected(e) {
     const result = await api.upload("/api/files/upload", fd);
     attachFile.value = result;
   } catch (err) {
-    alert("Upload failed: " + err.message);
+    toast(err.message || "Upload failed", "error");
   } finally {
     uploading.value = false;
     fileInput.value.value = "";
@@ -66,11 +67,17 @@ async function submit() {
     file_name: attachFile.value?.filename,
     file_content_type: attachFile.value?.content_type,
   };
-  if (props.channel === "group") {
-    await chat.sendGroupMessage({ ...payload, replyToId: replyToId.value });
-  } else {
-    // channel === "room": peerId is the room id.
-    await chat.sendRoomMessage(props.peerId, payload);
+  try {
+    if (props.channel === "group") {
+      await chat.sendGroupMessage({ ...payload, replyToId: replyToId.value });
+    } else {
+      // channel === "room": peerId is the room id.
+      await chat.sendRoomMessage(props.peerId, payload);
+    }
+  } catch (err) {
+    // Keep the text + attachment so the user can retry.
+    toast(err.message || "Message failed to send", "error");
+    return;
   }
   text.value = "";
   attachFile.value = null;
@@ -124,7 +131,7 @@ function isImage(file) {
         @input="onInput"
         @keydown="keydown"
       />
-      <button class="btn send-btn" :disabled="(!text.trim() && !attachFile) || uploading" @click="submit">
+      <button class="btn send-btn" :disabled="(!text.trim() && !attachFile?.url) || uploading" @click="submit">
         <span v-if="uploading">…</span>
         <span v-else>Send</span>
       </button>
