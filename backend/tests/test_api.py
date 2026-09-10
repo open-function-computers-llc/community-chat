@@ -167,7 +167,10 @@ def test_user_avatar_processed_to_webp():
     assert r.status_code == 200
     new_url = r.json()["avatar_url"]
     assert new_url != old_url
-    assert c.get(old_url).status_code == 404
+    # Old avatar deleted — the proxy serves a 200 placeholder, not a 404.
+    old_r = c.get(old_url)
+    assert old_r.status_code == 200
+    assert old_r.headers.get("X-File-Missing") == "true"
     assert c.get(new_url).status_code == 200
 
     # Non-image rejected.
@@ -434,6 +437,19 @@ def test_file_upload():
     assert r.status_code == 200
     r = c.get("/api/files/me", headers=auth(t1))
     assert r.json() == []
+
+    # The image proxy: a now-deleted upload must NOT 404 (the WAF counts 404s).
+    # It returns 200 with a placeholder and an X-File-Missing header.
+    r = c.get(body["url"])
+    assert r.status_code == 200
+    assert r.headers.get("X-File-Missing") == "true"
+    assert r.headers.get("content-type").startswith("image/")
+    assert b"Image unavailable" in r.content
+
+    # A path-traversal attempt must never read a file outside UPLOAD_DIR.
+    # (It is not routed to the proxy; it must not leak the target's contents.)
+    r = c.get("/uploads/..%2f..%2fetc%2fpasswd")
+    assert b"root:" not in r.content
 
 
 def test_ws_hello():

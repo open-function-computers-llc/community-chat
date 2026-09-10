@@ -3,16 +3,21 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi import FastAPI, WebSocket, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import select
 
-from .db import create_all
+from .db import create_all, get_db, File
 from .seed import seed_admin
 from .routers import auth, dms, email, families, files, invites, messages, push
-from .routers.upload_utils import UPLOAD_DIR
+from .routers.upload_utils import (
+    UPLOAD_DIR,
+    BROKEN_IMAGE_SVG,
+    content_type_for,
+)
 from .ws import hub, ws_endpoint
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -73,14 +78,55 @@ async def health():
     return {"status": "ok"}
 
 
+def _broken_image_response() -> Response:
+    """Placeholder served (200) when a requested upload no longer exists.
+
+    Returning 200 keeps the WAF from counting the hit as a 404 and spares the
+    browser its default broken-image icon. Callers can detect the case via the
+    X-File-Missing header if they ever need to.
+    """
+    return Response(
+        content=BROKEN_IMAGE_SVG,
+        status_code=200,
+        media_type="image/svg+xml",
+        headers={
+            "Cache-Control": "no-store",
+            "X-File-Missing": "true",
+        },
+    )
+
+
 @app.get("/uploads/{filename}")
-async def serve_upload(filename: str):
+async def serve_upload(
+    filename: str,
+    db=Depends(get_db),
+):
+    """Image/file proxy for stored uploads.
+
+    If the file still exists on disk, it is served with the correct
+    Content-Type and a long immutable cache (upload names are content-hashed
+    and never reused). If the file is gone (deleted from the gallery,
+    orphaned, or a path-traversal attempt), a 200 placeholder image is
+    returned instead of a 404 so the WAF and the browser never see a
+    missing-resource error.
+    """
+    upload_root = UPLOAD_DIR.resolve()
     path = (UPLOAD_DIR / filename).resolve()
-    if UPLOAD_DIR.resolve() not in path.parents:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    if not path.exists():
-        return JSONResponse({"error": "not found"}, status_code=404)
-    return FileResponse(path)
+    # Path-traversal guard: the resolved path must stay inside UPLOAD_DIR.
+    if upload_root not in path.parents or not path.is_file():
+        return _broken_image_response()
+
+    # Prefer the authoritative content_type from the DB record (when present),
+    # otherwise infer from the extension.
+    record = db.execute(
+        select(File.content_type).where(File.storage_name == filename)
+    ).scalar_one_or_none()
+    ctype = content_type_for(filename, record)
+    return FileResponse(
+        path,
+        media_type=ctype,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 class ImmutableFiles(StaticFiles):

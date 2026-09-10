@@ -173,12 +173,15 @@ def test_families_full_flow():
         avatar2 = r.json()
         assert avatar2["avatar_url"] != avatar1["avatar_url"]
 
-        # Old file deleted (no revisions kept).
+        # Old file deleted (no revisions kept) — the proxy now serves a 200
+        # placeholder (not a 404) so the WAF/browser never see a miss.
         r = c.get(avatar1["avatar_url"])
-        assert r.status_code == 404
+        assert r.status_code == 200
+        assert r.headers.get("X-File-Missing") == "true"
         # New file served (also a 500x500 WebP).
         r = c.get(avatar2["avatar_url"])
         assert r.status_code == 200
+        assert r.headers.get("X-File-Missing") is None
         assert r.content[:4] == WEBP_MAGIC
         assert Image.open(io.BytesIO(r.content)).size == (500, 500)
 

@@ -3,6 +3,7 @@ import { ref, onMounted } from "vue";
 import { storeToRefs } from "pinia";
 import { useAuthStore } from "@/stores/auth";
 import { fileDate } from "@/composables/useTime";
+import { toast } from "@/composables/useToasts";
 import Sidebar from "@/components/Sidebar.vue";
 
 const auth = useAuthStore();
@@ -10,6 +11,7 @@ const { me } = storeToRefs(auth);
 const mobileSidebar = ref(false);
 const myFiles = ref([]);
 const lightbox = ref(null);
+const deleting = ref(null); // id of the file currently being deleted
 
 onMounted(async () => {
   const { api } = await import("@/api");
@@ -22,6 +24,21 @@ function isImage(f) {
 
 function timeStr(iso) {
   return fileDate(iso);
+}
+
+async function removeFile(f) {
+  if (!confirm(`Delete "${f.filename}"? This can't be undone. Messages that referenced it will show a placeholder.`)) return;
+  const { api } = await import("@/api");
+  deleting.value = f.id;
+  try {
+    await api.del(`/api/files/${f.id}`);
+    myFiles.value = myFiles.value.filter((x) => x.id !== f.id);
+    toast("File deleted", "success");
+  } catch (err) {
+    toast(err.message || "Could not delete file", "error");
+  } finally {
+    deleting.value = null;
+  }
 }
 </script>
 
@@ -47,6 +64,14 @@ function timeStr(iso) {
           <div class="file-preview">
             <img v-if="isImage(f)" :src="f.url" :alt="f.filename" @click="lightbox = f" />
             <a v-else :href="f.url" target="_blank" class="file-file-icon">📄</a>
+            <button
+              v-if="deleting !== f.id"
+              class="file-delete"
+              title="Delete this file"
+              aria-label="Delete this file"
+              @click="removeFile(f)"
+            >✕</button>
+            <span v-else class="file-deleting">…</span>
           </div>
           <div class="file-info">
             <span class="file-name" :title="f.filename">{{ f.filename }}</span>
@@ -109,6 +134,7 @@ function timeStr(iso) {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  position: relative;
 }
 .file-preview img {
   width: 100%;
@@ -117,6 +143,34 @@ function timeStr(iso) {
   cursor: zoom-in;
 }
 .file-file-icon { font-size: 48px; }
+.file-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.file-card:hover .file-delete,
+.file-delete:focus-visible { opacity: 1; }
+.file-delete:hover { background: var(--danger, #dc3545); }
+.file-deleting {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: #fff;
+  font-size: 13px;
+}
 .file-info {
   padding: 10px 12px;
   display: flex;

@@ -39,9 +39,54 @@ IMAGE_CONTENT_TYPES = {
     "image/avif",
 }
 
+# Extension -> MIME map used by the image proxy to set a correct Content-Type
+# when the authoritative DB record isn't available (e.g. avatars / family
+# photos that live in UPLOAD_DIR but are not FileModel rows).
+EXT_CONTENT_TYPES: dict[str, str] = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".txt": "text/plain",
+    ".pdf": "application/pdf",
+}
+
+# Tiny inline placeholder returned (with HTTP 200) when a requested upload no
+# longer exists. Returning 200 instead of 404 keeps the WAF from counting the
+# request as a missing resource and avoids the browser's broken-image icon.
+# A neutral "image unavailable" card is shown in its place.
+BROKEN_IMAGE_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' width='320' height='240'>"
+    "<rect width='320' height='240' fill='#e9ecef'/>"
+    "<rect x='1' y='1' width='318' height='238' fill='none' stroke='#ced4da' stroke-width='2'/>"
+    "<circle cx='112' cy='96' r='16' fill='#adb5bd'/>"
+    "<path d='M60 188 L110 128 L150 168 L186 132 L240 188 Z' fill='#adb5bd'/>"
+    "<text x='160' y='212' font-family='sans-serif' font-size='15' fill='#6c757d' "
+    "text-anchor='middle'>Image unavailable</text>"
+    "</svg>"
+).encode("utf-8")
+
 
 def public_url(filename: str) -> str:
     return f"/uploads/{filename}"
+
+
+def content_type_for(filename: str, db_content_type: str | None = None) -> str:
+    """Best-effort MIME type for a stored upload.
+
+    Prefer the authoritative DB content_type; fall back to extension inference;
+    last resort is octet-stream (the caller decides how to render it).
+    """
+    if db_content_type:
+        return db_content_type
+    ext = os.path.splitext(filename)[1].lower()
+    return EXT_CONTENT_TYPES.get(ext, "application/octet-stream")
 
 
 def _storage_name(prefix: str, ext: str = "") -> str:
