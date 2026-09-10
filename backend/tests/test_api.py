@@ -412,22 +412,29 @@ def test_admin_user_stats_and_delete():
     assert r.status_code == 401
 
 
-def test_file_upload():
+def test_file_upload_image_resized_to_webp():
     c = client()
     t1, _ = make_user(c, "judy")
+    # A source PNG larger than the 2048px cap must be resized down + stored as WebP.
     r = c.post(
         "/api/files/upload",
         headers=auth(t1),
-        files={"file": ("hello.txt", b"hello there", "text/plain")},
+        files={"file": ("photo.png", _png(3000, 2000), "image/png")},
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["filename"] == "hello.txt"
+    assert body["filename"] == "photo.png"
+    assert body["content_type"] == "image/webp"
     assert body["url"].startswith("/uploads/")
 
+    # The served file is a real WebP (RIFF container) and decodes to <= 2048px.
     r = c.get(body["url"])
     assert r.status_code == 200
-    assert r.content == b"hello there"
+    assert r.headers.get("content-type") == "image/webp"
+    assert r.content[:4] == b"RIFF"
+    img = Image.open(io.BytesIO(r.content))
+    assert img.format == "WEBP"
+    assert max(img.size) <= 2048
 
     r = c.get("/api/files/me", headers=auth(t1))
     assert r.status_code == 200
@@ -450,6 +457,40 @@ def test_file_upload():
     # (It is not routed to the proxy; it must not leak the target's contents.)
     r = c.get("/uploads/..%2f..%2fetc%2fpasswd")
     assert b"root:" not in r.content
+
+
+def test_file_upload_restricted_types():
+    c = client()
+    t1, _ = make_user(c, "restrict")
+
+    # Only images and PDFs are allowed.
+    r = c.post(
+        "/api/files/upload",
+        headers=auth(t1),
+        files={"file": ("note.txt", b"hello", "text/plain")},
+    )
+    assert r.status_code == 415
+    r = c.post(
+        "/api/files/upload",
+        headers=auth(t1),
+        files={"file": ("clip.mp4", b"000", "video/mp4")},
+    )
+    assert r.status_code == 415
+
+    # A PDF is accepted and stored verbatim (not re-encoded).
+    pdf = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"
+    r = c.post(
+        "/api/files/upload",
+        headers=auth(t1),
+        files={"file": ("doc.pdf", pdf, "application/pdf")},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["content_type"] == "application/pdf"
+    got = c.get(body["url"])
+    assert got.status_code == 200
+    assert got.content == pdf
+    assert got.headers.get("content-type") == "application/pdf"
 
 
 def test_ws_hello():

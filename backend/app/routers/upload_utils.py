@@ -180,6 +180,51 @@ def process_avatar(content: bytes, *, prefix: str) -> tuple[str, int]:
     return storage_name, len(data)
 
 
+# Chat/gallery image uploads are resized (no crop) so the longest side is at
+# most CHAT_IMAGE_MAX_SIDE and stored as WebP at CHAT_IMAGE_QUALITY. This keeps
+# phone photos small (a few hundred KB to ~1MB) for snappy uploads + viewing.
+CHAT_IMAGE_MAX_SIDE = 2048
+CHAT_IMAGE_QUALITY = 80
+
+
+def process_chat_image(content: bytes, *, prefix: str) -> tuple[str, int]:
+    """Resize a chat image (longest side -> CHAT_IMAGE_MAX_SIDE) and store it
+    as a WebP. Unlike process_avatar this does NOT center-crop; the original
+    aspect ratio is preserved. Returns (storage_name, size). Raises 415 for a
+    non-decodable image.
+    """
+    try:
+        img = Image.open(io.BytesIO(content))
+        img.load()
+        if img.mode not in ("RGB", "RGBA"):
+            # Convert palette/CMYK/etc. images so the WebP save works cleanly.
+            # Animated GIFs reduce to their first frame (fine for chat).
+            img = img.convert("RGBA")
+    except Exception as exc:  # noqa: BLE001 - any decode failure is a bad image
+        raise HTTPException(status_code=415, detail="Could not read that image") from exc
+
+    w, h = img.size
+    longest = max(w, h)
+    if longest > CHAT_IMAGE_MAX_SIDE:
+        scale = CHAT_IMAGE_MAX_SIDE / longest
+        img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+
+    # Flatten alpha onto white so the WebP is a clean, predictable size.
+    if img.mode == "RGBA":
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(img, mask=img.split()[3])
+        img = background
+
+    buffer = io.BytesIO()
+    img.save(buffer, format="WEBP", quality=CHAT_IMAGE_QUALITY)
+    data = buffer.getvalue()
+
+    storage_name = _storage_name(prefix, ".webp")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    (UPLOAD_DIR / storage_name).write_bytes(data)
+    return storage_name, len(data)
+
+
 def delete_file(public_file_url: str | None) -> None:
     """Delete a previously uploaded file from disk (best-effort)."""
     if not public_file_url:

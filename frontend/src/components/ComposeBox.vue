@@ -131,7 +131,7 @@ function isImage(file) {
       <button class="reply-cancel" @click="attachFile = null">✕</button>
     </div>
     <div class="compose-row">
-      <input ref="fileInput" type="file" class="file-input" @change="onFileSelected" />
+      <input ref="fileInput" type="file" accept="image/*,application/pdf" class="file-input" @change="onFileSelected" />
       <button class="attach-btn" title="Attach file" @click="fileInput.click">📎</button>
       <textarea
         v-model="text"

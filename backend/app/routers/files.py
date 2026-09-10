@@ -4,24 +4,39 @@ from sqlalchemy import select
 from ..db import get_db, iso_utc
 from ..models import File as FileModel, User
 from ..core.security import get_current_user
-from .upload_utils import delete_file as delete_uploaded_file, public_url, save_upload
+from .upload_utils import (
+    MAX_UPLOAD_SIZE,
+    _storage_name,
+    delete_file as delete_uploaded_file,
+    public_url,
+    process_chat_image,
+    UPLOAD_DIR,
+)
 
 router = APIRouter()
 
-ALLOWED_CONTENT_TYPES = {
+# Only images and PDFs are shared in chat. Images are re-encoded to WebP on
+# upload (see process_chat_image); PDFs are stored as-is.
+IMAGE_CONTENT_TYPES = {
     "image/jpeg",
     "image/png",
     "image/gif",
     "image/webp",
-    "image/svg+xml",
     "image/avif",
-    "video/mp4",
-    "video/webm",
-    "text/plain",
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+PDF_CONTENT_TYPES = {"application/pdf"}
+ALLOWED_CONTENT_TYPES = IMAGE_CONTENT_TYPES | PDF_CONTENT_TYPES
+
+
+def _store_raw(content: bytes, filename: str | None, *, prefix: str) -> tuple[str, int]:
+    """Persist a non-image file (PDF) verbatim. Returns (storage_name, size)."""
+    ext = ""
+    if filename and "." in filename:
+        ext = "." + filename.rsplit(".", 1)[-1].lower()
+    storage_name = _storage_name(prefix, ext or ".pdf")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    (UPLOAD_DIR / storage_name).write_bytes(content)
+    return storage_name, len(content)
 
 
 @router.get("/me")
@@ -46,17 +61,25 @@ async def upload_file(
     user: User = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    storage_name, size = await save_upload(
-        file,
-        prefix=str(user.id),
-        allowed_content_types=ALLOWED_CONTENT_TYPES,
-    )
+    content = await file.read()
+    if file.content_type in IMAGE_CONTENT_TYPES:
+        # Re-encode as a resized WebP; the stored content_type becomes
+        # image/webp regardless of the source format.
+        storage_name, size = process_chat_image(content, prefix=str(user.id))
+        stored_content_type = "image/webp"
+    elif file.content_type in PDF_CONTENT_TYPES:
+        if len(content) > MAX_UPLOAD_SIZE:
+            raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+        storage_name, size = _store_raw(content, file.filename, prefix=str(user.id))
+        stored_content_type = "application/pdf"
+    else:
+        raise HTTPException(status_code=415, detail="Unsupported file type")
 
     record = FileModel(
         owner_id=user.id,
         filename=file.filename or "file",
         storage_name=storage_name,
-        content_type=file.content_type,
+        content_type=stored_content_type,
         size=size,
     )
     db.add(record)
