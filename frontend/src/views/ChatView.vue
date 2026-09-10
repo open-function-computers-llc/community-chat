@@ -18,6 +18,10 @@ const mobileSidebar = ref(false);
 const loadingOlder = ref(false);
 const refreshing = ref(false);
 let wsUnsub = null;
+// True only on the very first mount after a page load (not on SPA navigation
+// back from another view). Used to scroll to the newest message on initial
+// load while preserving the user's scroll position on later visits.
+let firstMount = true;
 
 const showTyping = computed(() => typingNames.value.length > 0);
 // A banner invites a manual refresh while we're not fully live (dropped
@@ -92,9 +96,17 @@ function handleWs(msg) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   wsUnsub = onWsEvent(handleWs);
-  requestAnimationFrame(() => scrollToEnd());
+  if (firstMount) {
+    firstMount = false;
+    // On a fresh page load the group messages may not be in the store yet
+    // (App.vue loads them in parallel with the router). Await the load so the
+    // scroll-to-bottom lands on real content. On later mounts (returning from
+    // another view) we skip this so the user's saved scroll position sticks.
+    await chat.loadGroupMessages().catch(() => {});
+    scrollToEnd();
+  }
 });
 
 onUnmounted(() => {
