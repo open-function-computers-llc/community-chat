@@ -24,6 +24,10 @@ const uploading = ref(false);
 const fileInput = ref(null);
 let typingSentAt = 0;
 
+// --- TEMP DEBUG: confirm a fresh bundle is loaded + trace the send path ---
+console.log("[compose-debug] ComposeBox setup — bundle is FRESH (build aaf812b+)");
+console.log("[compose-debug] initial state", { attachFile: attachFile.value, uploading: uploading.value });
+
 function onInput() {
   // Typing indicators only apply to the group chat; family rooms don't use
   // them (noisy with multiple members).
@@ -52,9 +56,12 @@ async function onFileSelected(e) {
     const fd = new FormData();
     fd.append("file", file);
     const result = await api.upload("/api/files/upload", fd);
+    console.log("[compose-debug] upload response", result);
     if (result && result.url) attachFile.value = result;
     else toast("Upload failed — no file returned", "error");
+    console.log("[compose-debug] after upload", { attachFile: attachFile.value, uploading: uploading.value });
   } catch (err) {
+    console.log("[compose-debug] upload THREW", err);
     toast(err.message || "Upload failed", "error");
   } finally {
     // Reset in case the upload was interrupted (e.g. page hidden/aborted) and
@@ -65,18 +72,27 @@ async function onFileSelected(e) {
 }
 
 async function submit() {
-  if (uploading.value) return;
+  console.log("[compose-debug] submit() called", { uploading: uploading.value, text: text.value, attachFile: attachFile.value });
+  if (uploading.value) {
+    console.log("[compose-debug] submit() EARLY RETURN — uploading is true");
+    return;
+  }
   const trimmed = text.value.trim();
   const fileUrl = attachFile.value?.url;
+  console.log("[compose-debug] computed fileUrl", { fileUrl, attachFile: attachFile.value });
   // Never send an empty message: guard on the real file URL, not just the
   // presence of the object, so a stale/partial attachment can't slip through.
-  if (!trimmed && !fileUrl) return;
+  if (!trimmed && !fileUrl) {
+    console.log("[compose-debug] submit() EARLY RETURN — nothing to send (no text, no fileUrl)");
+    return;
+  }
   const payload = {
     text: trimmed,
     file_url: fileUrl,
     file_name: attachFile.value?.filename,
     file_content_type: attachFile.value?.content_type,
   };
+  console.log("[compose-debug] payload being sent", payload, "channel=", props.channel);
   try {
     if (props.channel === "group") {
       await chat.sendGroupMessage({ ...payload, replyToId: replyToId.value });
