@@ -12,6 +12,9 @@ const props = defineProps({
   channel: { type: String, default: "group" },
   peerId: { type: Number, default: null },
   isOwn: Boolean,
+  // False when this message is a continuation of the previous one (same
+  // author, short gap): the avatar + name + timestamp are suppressed.
+  firstInGroup: { type: Boolean, default: true },
 });
 
 const auth = useAuthStore();
@@ -64,9 +67,9 @@ function openLightbox() {
 </script>
 
 <template>
-  <div class="bubble-wrap" :class="{ own: isOwn }">
+  <div class="bubble-wrap" :class="{ own: isOwn, continuation: !firstInGroup }">
     <Avatar
-      v-if="!isOwn && channel === 'group'"
+      v-if="!isOwn && channel === 'group' && firstInGroup"
       :user="message.author"
       size="sm"
       class="avatar-clickable"
@@ -75,7 +78,7 @@ function openLightbox() {
       @click="openAvatar"
     />
     <div class="bubble-col">
-      <div v-if="!isOwn" class="meta-row">
+      <div v-if="!isOwn && firstInGroup" class="meta-row">
         <span class="author">{{ message.author.display_name }}</span>
         <span class="time">{{ timeStr(message.created_at) }}</span>
         <span v-if="message.edited_at" class="edited">(edited)</span>
@@ -154,6 +157,11 @@ function openLightbox() {
   position: relative;
 }
 .bubble-wrap.own { flex-direction: row-reverse; }
+/* Continuation of the same author: tighter vertical rhythm, and indent the
+   bubble so it lines up under the first message of the run (past the avatar
+   column that's only rendered on the first message). */
+.bubble-wrap.continuation { padding-top: 0; }
+.bubble-wrap.continuation:not(.own) .bubble-col { padding-left: 36px; }
 .bubble-col {
   max-width: 70%;
   display: flex;
@@ -249,6 +257,9 @@ function openLightbox() {
 }
 .lightbox-img { max-width: 92vw; max-height: 92vh; object-fit: contain; }
 .avatar-clickable { cursor: zoom-in; }
+/* The add-reaction button (inside the Reactions child) is hidden until the
+   whole message is hovered, so it never takes up vertical space. */
+.bubble-col:hover :deep(.reaction-add) { opacity: 1; pointer-events: auto; }
 .avatar-zoom {
   max-width: 100%;
   max-height: 100%;

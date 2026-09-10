@@ -24,6 +24,20 @@ const showTyping = computed(() => typingNames.value.length > 0);
 // connection, mid-reconnect) — the usual way to catch up on missed messages.
 const connectionLive = computed(() => wsStatus.value === "connected");
 
+// Message grouping: consecutive messages from the same author within a short
+// window are rendered as one visual run — the avatar, name, and timestamp only
+// appear on the first message of the run; the rest flow inline (compact).
+const GROUP_GAP_MS = 5 * 60 * 1000; // 5 minutes
+function isGroupStart(i) {
+  const msgs = groupMessages.value;
+  if (i === 0) return true;
+  const cur = msgs[i];
+  const prev = msgs[i - 1];
+  if (cur.author?.id !== prev.author?.id) return true;
+  const gap = new Date(cur.created_at).getTime() - new Date(prev.created_at).getTime();
+  return gap > GROUP_GAP_MS;
+}
+
 // Always an instant jump: "smooth" can lag behind fast message bursts and
 // leave the newest message sitting below the fold.
 function scrollToEnd() {
@@ -122,11 +136,12 @@ onUnmounted(() => {
           <p>Say hi to everyone — this is where our little corner of the internet lives.</p>
         </div>
         <MessageBubble
-          v-for="msg in groupMessages"
+          v-for="(msg, i) in groupMessages"
           :key="msg.id"
           :message="msg"
           channel="group"
           :is-own="msg.author?.id === me?.id"
+          :first-in-group="isGroupStart(i)"
         />
       </div>
 

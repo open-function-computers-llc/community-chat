@@ -102,6 +102,10 @@ function pick(emoji) {
 <style scoped>
 .reactions { margin-top: 4px; position: relative; }
 .reaction-row { display: flex; flex-wrap: wrap; gap: 4px; }
+/* The add-reaction button is absolutely positioned so it never consumes
+   vertical space; MessageBubble reveals it on hover via :deep(). When the
+   row has no pills (no reactions yet) the container collapses to zero height. */
+.reactions:empty { margin-top: 0; }
 .reaction-pill {
   position: relative;
   display: inline-flex;
@@ -138,11 +142,18 @@ function pick(emoji) {
 .who-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
 .who-name { font-size: 13px; color: var(--text); }
 .reaction-add {
-  font-size: 13px;
-  padding: 2px 8px;
+  position: absolute;
+  top: -6px;
+  right: 0;
+  font-size: 12px;
+  padding: 1px 7px;
   border-radius: 10px;
   color: var(--text-muted);
   border: 1px dashed var(--border);
+  background: var(--bg-elevated);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
 }
 .reaction-add:hover { border-color: var(--text-muted); }
 .picker {
