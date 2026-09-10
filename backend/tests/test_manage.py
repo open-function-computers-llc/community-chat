@@ -117,6 +117,50 @@ def test_reset_admin_password_generates(tmp_path):
     assert "New password:" in proc.stdout
 
 
+# --- reset-password --------------------------------------------------------
+def test_reset_password_no_target_shows_usage_and_list(tmp_path):
+    proc = _run(tmp_path, ["reset-password"])
+    assert proc.returncode == 1, proc.stderr
+    # Prints the member roster (default seed has admin + alice).
+    assert "alice" in proc.stdout
+    assert "admin" in proc.stdout
+    # And a usage hint.
+    assert "reset-password <id|handle>" in proc.stdout
+
+
+def test_reset_password_generate(tmp_path):
+    proc = _run(tmp_path, ["reset-password", "alice", "--generate", "--yes"])
+    assert proc.returncode == 0, proc.stderr
+    assert "New password:" in proc.stdout
+    stored = _query(tmp_path, "SELECT password_hash FROM users WHERE handle='alice'").fetchone()[0]
+    assert stored != "oldhash"
+
+
+def test_reset_password_explicit(tmp_path):
+    proc = _run(tmp_path, ["reset-password", "alice", "--password", "brandnew", "--yes"])
+    assert proc.returncode == 0, proc.stderr
+    stored = _query(tmp_path, "SELECT password_hash FROM users WHERE handle='alice'").fetchone()[0]
+    assert bcrypt.checkpw(b"brandnew", stored.encode("utf-8"))
+    assert not bcrypt.checkpw(b"oldhash", stored.encode("utf-8"))
+
+
+def test_reset_password_missing_user(tmp_path):
+    proc = _run(tmp_path, ["reset-password", "ghost", "--password", "x", "--yes"])
+    assert proc.returncode == 1
+    assert "no user" in proc.stderr
+
+
+def test_reset_password_json(tmp_path):
+    proc = _run(tmp_path, ["reset-password", "alice", "--generate", "--yes", "--json"])
+    assert proc.returncode == 0, proc.stderr
+    import json
+
+    data = json.loads(proc.stdout)
+    assert data["ok"] is True
+    assert data["handle"] == "alice"
+    assert "email_sent" in data
+
+
 # --- list-members ----------------------------------------------------------
 def test_list_members(tmp_path):
     proc = _run(tmp_path, ["list-members"])

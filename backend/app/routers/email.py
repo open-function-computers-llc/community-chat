@@ -233,6 +233,35 @@ def invite_html(recipient_name: str, code: str, link: str, family_name: str | No
     )
 
 
+def password_reset_html(recipient_name: str, password: str, handle: str) -> str:
+    body = (
+        f"<p style='margin:0 0 12px;'>Hey {_esc(recipient_name)}, an administrator reset the password "
+        f"for your Community Chat account ({_esc(handle)}). Sign in with your username and the "
+        "temporary password below.</p>"
+        f"<p style='margin:0 0 4px;font-size:13px;color:#5f6368;'>Temporary password</p>"
+        f"<p style='margin:0 0 8px;font-family:monospace;font-size:20px;font-weight:bold;letter-spacing:0.05em;'>"
+        f"{_esc(password)}</p>"
+        f"<p style='margin:8px 0 0;font-size:13px;color:#5f6368;'>"
+        "We recommend changing it to something you remember after you sign in.</p>"
+    )
+    return (
+        _BASE_CSS
+        + _header_html("Your Community Chat password was reset")
+        + f'<tr><td style="padding:0 28px 8px;">{body}</td></tr>'
+        + _button_html("Sign in", app_origin() + "/login")
+        + _FOOTER
+    )
+
+
+def send_password_reset_email(to_addr: str, recipient_name: str, password: str, handle: str) -> bool:
+    """Send a password-reset email with the new (temporary) password."""
+    return send_email(
+        "Your Community Chat password was reset",
+        password_reset_html(recipient_name, password, handle),
+        to_addr,
+    )
+
+
 def welcome_html(display_name: str) -> str:
     name = (display_name or "").split()[0] if display_name else ""
     body = f"<p style='margin:0;'>Welcome{f' {name}' if name else ''}! You've joined Community Chat.</p>"

@@ -17,6 +17,8 @@ Subcommands:
     create-family <name>  create a family (+ --description)
     assign-member <handle> <family>  put a user in a family (0 to remove)
     reset-admin-password  recover the admin password (--handle --password --generate)
+    reset-password [<id|handle>]  reset any user's password (auto-generated;
+                                  omit the target to list members + usage)
 
 Every subcommand accepts --json to emit machine-readable output.
 """
@@ -42,7 +44,9 @@ os.environ.setdefault(
 )
 
 from app.db import Base, SessionLocal, engine, iso_utc  # noqa: E402
+from app.core.config import email_enabled  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
+from app.routers.email import send_password_reset_email  # noqa: E402
 from app.models import (  # noqa: E402
     DMSettings,
     Family,
@@ -174,30 +178,39 @@ def _user_stats(db, uids: list[int]) -> dict:
 # ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
+def _members_rows(db, include_inactive: bool) -> list[dict]:
+    """Member roster with activity stats (shared by list-members and usage hints)."""
+    q = db.query(User).order_by(User.display_name, User.handle)
+    if include_inactive:
+        users = q.all()
+    else:
+        users = q.filter(User.is_active == True).all()  # noqa: E712
+    uids = [u.id for u in users]
+    stats = _user_stats(db, uids) if uids else {}
+    return [{**_public_user(u), **stats.get(u.id, {})} for u in users]
+
+
+def _render_members(pretty: list[dict]) -> str:
+    if not pretty:
+        return "(no members)"
+    lines = []
+    for row in pretty:
+        lines.append(
+            f"{row['id']:>3}  {row['handle']:<20} {row['display_name']:<18} "
+            f"{'ADMIN' if row['is_admin'] else '     '}  "
+            f"g={row['group_message_count']} r={row['room_message_count']} "
+            f"last={row['last_active_at'] or '-'}  fam={row['family_name'] or '-'}"
+        )
+    return "\n".join(lines)
+
+
 def _cmd_list_members(args) -> int:
     db = _open()
     try:
-        q = db.query(User).order_by(User.display_name, User.handle)
-        if args.all:
-            users = q.all()
-        else:
-            users = q.filter(User.is_active == True).all()  # noqa: E712
-        uids = [u.id for u in users]
-        stats = _user_stats(db, uids) if uids else {}
-        pretty = [{**_public_user(u), **stats.get(u.id, {})} for u in users]
+        pretty = _members_rows(db, include_inactive=args.all)
         if args.json:
             return _emit(args, pretty, pretty)
-        if not users:
-            return _emit(args, "(no members)", [])
-        lines = []
-        for row in pretty:
-            lines.append(
-                f"{row['id']:>3}  {row['handle']:<20} {row['display_name']:<18} "
-                f"{'ADMIN' if row['is_admin'] else '     '}  "
-                f"g={row['group_message_count']} r={row['room_message_count']} "
-                f"last={row['last_active_at'] or '-'}  fam={row['family_name'] or '-'}"
-            )
-        return _emit(args, "\n".join(lines), pretty)
+        return _emit(args, _render_members(pretty), pretty)
     finally:
         db.close()
 
@@ -466,6 +479,89 @@ def _cmd_reset_admin_password(args) -> int:
         db.close()
 
 
+def _cmd_reset_password(args) -> int:
+    db = _open()
+    try:
+        # No target given: show the roster + how to use this command.
+        if args.handle is None:
+            if args.json:
+                print("Usage: manage.py reset-password <id|handle> [--password P | --generate] [--no-email]", file=sys.stderr)
+                return 1
+            pretty = _members_rows(db, include_inactive=False)
+            print(_render_members(pretty))
+            print()
+            print("No user specified. To reset a password, run:")
+            print("    manage.py reset-password <id|handle>            # auto-generated password")
+            print("    manage.py reset-password <id|handle> --generate  # same (explicit)")
+            print("    manage.py reset-password <id|handle> --password P  # set a specific password")
+            print("    manage.py reset-password <id|handle> --no-email    # skip the email")
+            print("If SMTP is enabled and the user has an email on file, the new password is emailed to them.")
+            return 1
+
+        target = _find_user(db, args.handle)
+        if target is None:
+            print(f"Error: no user '{args.handle}'.", file=sys.stderr)
+            return 1
+
+        if args.password:
+            password = args.password
+        elif args.generate:
+            password = _generate_password()
+        else:
+            password = getpass.getpass(f"New password for {target.handle}: ")
+            confirm = getpass.getpass("Confirm password: ")
+            if password != confirm:
+                print("Error: passwords do not match.", file=sys.stderr)
+                return 1
+
+        if not args.yes and not _confirm(
+            f"Reset the password for {target.handle} (id {target.id})?"
+        ):
+            print("Aborted.")
+            return 1
+
+        target.password_hash = hash_password(password)
+        db.commit()
+
+        # Best-effort email (only if SMTP is on, the user has an address, and
+        # --no-email wasn't given). The password is never emailed in plain text
+        # to a log; it's shown once on stdout and (optionally) in the email.
+        email_sent = False
+        if (
+            not args.no_email
+            and email_enabled()
+            and target.email
+            and "@" in target.email
+        ):
+            email_sent = send_password_reset_email(
+                target.email,
+                target.display_name or target.handle,
+                password,
+                target.handle,
+            )
+
+        if args.json:
+            return _emit(
+                args,
+                f"Password for '{target.handle}' has been reset.",
+                {"ok": True, "id": target.id, "handle": target.handle, "email_sent": email_sent},
+            )
+        print(f"Password for '{target.handle}' (id {target.id}) has been reset.")
+        if args.generate or args.password is None:
+            print(f"New password: {password}")
+            print("(Save this now; it is not stored in plain text.)")
+        if not args.no_email and email_enabled():
+            if email_sent:
+                print(f"Sent the new password to {target.email}.")
+            elif not (target.email and "@" in target.email):
+                print("(No email on file for this user; not emailed.)")
+            else:
+                print("(Email could not be sent; the user did not receive it.)")
+        return 0
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -538,6 +634,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--generate", action="store_true", help="Generate and print a random password.")
     _add_json(p)
     p.set_defaults(func=_cmd_reset_admin_password)
+
+    p = sub.add_parser("reset-password", help="Reset a user's password (auto-generated by default).")
+    p.add_argument(
+        "handle",
+        nargs="?",
+        help="User id or handle. Omit to print the member list + usage.",
+    )
+    p.add_argument("--password", help="Set the password directly (hidden if omitted).")
+    p.add_argument("--generate", action="store_true", help="Generate and print a random password.")
+    p.add_argument("--no-email", action="store_true", help="Do not email the new password.")
+    p.add_argument("--yes", action="store_true", help="Skip confirmation.")
+    _add_json(p)
+    p.set_defaults(func=_cmd_reset_password)
 
     return parser
 
