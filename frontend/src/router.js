@@ -53,7 +53,7 @@ const router = createRouter({
   routes,
 });
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore();
   if (to.meta.requiresAuth && !auth.isAuthenticated) {
     return { name: "login" };
@@ -61,8 +61,20 @@ router.beforeEach((to) => {
   if (to.meta.requiresAdmin && !auth.user?.is_admin) {
     return { name: "chat" };
   }
+  // A logged-in visitor to /login should be bounced off the login screen.
+  // Where they land depends on whether their profile is set up (has a bio):
+  // first-timers (blank bio) go to the onboarding profile page; everyone else
+  // goes to the group chat. auth.user may not be loaded yet on a fresh page
+  // load (it starts null until refreshUser() resolves), so load it first.
   if (to.name === "login" && auth.isAuthenticated) {
-    return auth.user ? { name: "chat" } : { name: "profile" };
+    if (!auth.user) {
+      try {
+        await auth.refreshUser();
+      } catch {
+        // If the refresh fails we still have a valid token; default to chat.
+      }
+    }
+    return auth.user?.bio ? { name: "chat" } : { name: "profile" };
   }
 });
 
