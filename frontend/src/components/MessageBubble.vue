@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
 import { timeStr } from "@/composables/useTime";
+import { linkifyHtml } from "@/composables/useText";
 import Avatar from "./Avatar.vue";
 import Reactions from "./Reactions.vue";
 import Modal from "./Modal.vue";
@@ -98,9 +99,12 @@ function openLightbox() {
           </div>
         </div>
         <template v-else>
-          <p v-if="message.text" class="text" @dblclick="channel === 'group' && isOwn && (editing = true)">
-            {{ message.text }}
-          </p>
+          <p
+            v-if="message.text"
+            class="text"
+            v-html="linkifyHtml(message.text)"
+            @dblclick="channel === 'group' && isOwn && (editing = true)"
+          />
           <div v-if="message.file_url" class="file-attach">
             <img
               v-if="isImage(message)"
@@ -203,7 +207,13 @@ function openLightbox() {
   max-width: 100%;
 }
 .bubble.no-bg { background: var(--accent-soft); border-color: var(--accent); }
-.text { white-space: pre-wrap; font-size: 14px; }
+.text { white-space: pre-wrap; font-size: 14px; overflow-wrap: anywhere; }
+.text a {
+  color: var(--accent);
+  text-decoration: underline;
+  word-break: break-all;
+}
+.text a:hover { color: var(--accent-hover); }
 .file-attach { margin-top: 4px; }
 .file-img {
   max-width: 320px;
