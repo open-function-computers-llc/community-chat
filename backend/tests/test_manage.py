@@ -40,8 +40,13 @@ def _seed_code(tmp: Path) -> str:
     )
 
 
-def _run(tmp: Path, argv, seed: str = None):
-    """Run manage.py in a subprocess against a fresh SQLite file in tmp."""
+def _run(tmp: Path, argv, seed: str = None, stdin: str = ""):
+    """Run manage.py in a subprocess against a fresh SQLite file in tmp.
+
+    stdin defaults to a closed pipe (capture_output), which means stdin is NOT
+    a TTY — the same condition as `docker exec` without -it. Pass `stdin` to
+    feed the interactive prompts (password/confirm) through the pipe.
+    """
     db_path = tmp / "chat.db"
     env = {
         "DATABASE_URL": f"sqlite:///{db_path}",
@@ -63,7 +68,12 @@ def _run(tmp: Path, argv, seed: str = None):
         + f"\nimport manage\nimport sys\nsys.exit(manage.main({list(argv)!r}))\n"
     )
     return subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=BACKEND_DIR
+        [sys.executable, "-c", code],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=BACKEND_DIR,
     )
 
 
@@ -159,6 +169,19 @@ def test_reset_password_json(tmp_path):
     assert data["ok"] is True
     assert data["handle"] == "alice"
     assert "email_sent" in data
+
+
+def test_reset_password_interactive_non_tty(tmp_path):
+    # No --password/--yes: the prompts must work when stdin is a pipe (the
+    # docker-exec-without-tty case). Feed confirm+password through stdin.
+    proc = _run(
+        tmp_path,
+        ["reset-password", "alice"],
+        stdin="newpass1\nnewpass1\ny\n",
+    )
+    assert proc.returncode == 0, proc.stderr
+    stored = _query(tmp_path, "SELECT password_hash FROM users WHERE handle='alice'").fetchone()[0]
+    assert bcrypt.checkpw(b"newpass1", stored.encode("utf-8"))
 
 
 # --- list-members ----------------------------------------------------------

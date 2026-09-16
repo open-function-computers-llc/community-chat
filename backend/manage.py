@@ -79,8 +79,24 @@ def _open():
     return SessionLocal()
 
 
+def _is_tty() -> bool:
+    """True when stdin is an interactive terminal. False under `docker exec`
+    (without -it) or piped input, where getpass can't control echo and would
+    raise termios.error / EOFError instead of reading the line."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _prompt_secret(prompt: str) -> str:
+    """Read a secret. Uses getpass (hidden) on a TTY; falls back to plain
+    input() otherwise so the CLI still works via `docker exec -i ... < input`."""
+    if _is_tty():
+        return getpass.getpass(prompt + " ")
+    print(prompt, end=" ")
+    return input().strip()
+
+
 def _confirm(prompt: str) -> bool:
-    return getpass.getpass(prompt + " [y/N] ").strip().lower() in ("y", "yes")
+    return _prompt_secret(prompt + " [y/N]").strip().lower() in ("y", "yes")
 
 
 def _find_user(db, handle_or_id: str) -> User | None:
@@ -444,8 +460,8 @@ def _cmd_reset_admin_password(args) -> int:
     elif args.generate:
         password = _generate_password()
     else:
-        password = getpass.getpass("New password: ")
-        confirm = getpass.getpass("Confirm password: ")
+        password = _prompt_secret("New password")
+        confirm = _prompt_secret("Confirm password")
         if password != confirm:
             print("Error: passwords do not match.", file=sys.stderr)
             return 1
@@ -508,8 +524,8 @@ def _cmd_reset_password(args) -> int:
         elif args.generate:
             password = _generate_password()
         else:
-            password = getpass.getpass(f"New password for {target.handle}: ")
-            confirm = getpass.getpass("Confirm password: ")
+            password = _prompt_secret(f"New password for {target.handle}")
+            confirm = _prompt_secret("Confirm password")
             if password != confirm:
                 print("Error: passwords do not match.", file=sys.stderr)
                 return 1
