@@ -19,6 +19,7 @@ Subcommands:
     reset-admin-password  recover the admin password (--handle --password --generate)
     reset-password [<id|handle>]  reset any user's password (auto-generated;
                                   omit the target to list members + usage)
+    backup-db               back up the DB to chat-<timestamp>.db + prune >30d
 
 Every subcommand accepts --json to emit machine-readable output.
 """
@@ -27,8 +28,11 @@ import getpass
 import json
 import os
 import secrets
+import shutil
+import sqlite3
 import string
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -218,6 +222,17 @@ def _render_members(pretty: list[dict]) -> str:
             f"last={row['last_active_at'] or '-'}  fam={row['family_name'] or '-'}"
         )
     return "\n".join(lines)
+
+
+def _db_file() -> Path:
+    """Resolve the SQLite file the app uses, from DATABASE_URL (or the default
+    layout). Raises if it isn't a SQLite file (e.g. :memory: or a non-sqlite URL)."""
+    url = os.environ.get("DATABASE_URL", f"sqlite:///{Path(__file__).resolve().parent / 'data' / 'chat.db'}")
+    if url.startswith("sqlite:///"):
+        return Path(url[len("sqlite:///"):])
+    if url in ("sqlite:///:memory:", "sqlite://"):
+        raise RuntimeError("DATABASE_URL is an in-memory database; nothing to back up.")
+    raise RuntimeError(f"Unsupported DATABASE_URL for backup (expected sqlite): {url}")
 
 
 def _cmd_list_members(args) -> int:
@@ -578,6 +593,74 @@ def _cmd_reset_password(args) -> int:
         db.close()
 
 
+# Backups are named <dbstem>-<UTC timestamp>.db, e.g. chat-20260910T030000Z.db.
+_BACKUP_STALE_SECONDS = 30 * 24 * 60 * 60  # prune anything older than a month
+
+
+def _backup_files(db_file: Path) -> list[Path]:
+    """All backup files for this DB (chat-*.db), newest first. Excludes the
+    live DB file itself (chat.db) and any non-timestamped files."""
+    pattern = f"{db_file.stem}-*.db"
+    out = []
+    for p in db_file.parent.glob(pattern):
+        if p.resolve() == db_file.resolve():
+            continue
+        out.append(p)
+    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return out
+
+
+def _cmd_backup_db(args) -> int:
+    try:
+        db_file = _db_file()
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if not db_file.exists():
+        print(f"Error: database file not found: {db_file}", file=sys.stderr)
+        return 1
+
+    # Use SQLite's online backup API (not a raw copy) so the snapshot is
+    # internally consistent even while the app is writing to the live DB.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    dest = db_file.parent / f"{db_file.stem}-{stamp}.db"
+    src = sqlite3.connect(str(db_file))
+    try:
+        dst = sqlite3.connect(str(dest))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+    size = dest.stat().st_size
+    pruned: list[str] = []
+    if not args.no_prune:
+        cutoff = time.time() - _BACKUP_STALE_SECONDS
+        for old in _backup_files(db_file):
+            if old.stat().st_mtime < cutoff:
+                try:
+                    old.unlink()
+                    pruned.append(old.name)
+                except OSError:
+                    pass  # best-effort; a file we can't delete isn't fatal
+
+    pretty = {
+        "ok": True,
+        "backup": str(dest),
+        "size_bytes": size,
+        "pruned": pruned,
+    }
+    if args.json:
+        return _emit(args, f"Backed up to {dest.name}.", pretty)
+    print(f"Backed up {db_file.name} -> {dest.name} ({size / 1024:.1f} KB).")
+    if pruned:
+        print(f"Pruned {len(pruned)} old backup(s): {', '.join(pruned)}")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -663,6 +746,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yes", action="store_true", help="Skip confirmation.")
     _add_json(p)
     p.set_defaults(func=_cmd_reset_password)
+
+    p = sub.add_parser(
+        "backup-db",
+        help="Back up the SQLite DB to a timestamped copy; prune backups >30 days old.",
+    )
+    p.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="Create the backup but do not delete old backups.",
+    )
+    _add_json(p)
+    p.set_defaults(func=_cmd_backup_db)
 
     return parser
 

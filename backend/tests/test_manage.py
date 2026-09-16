@@ -348,3 +348,55 @@ def test_assign_member_bad_family(tmp_path):
     proc = _run(tmp_path, ["assign-member", "alice", "Nowhere"])
     assert proc.returncode == 1
     assert "no family" in proc.stderr
+
+
+# --- backup-db -------------------------------------------------------------
+def _backups(tmp: Path) -> list[Path]:
+    return sorted(p for p in tmp.glob("chat-*.db") if p.name != "chat.db")
+
+
+def test_backup_db_creates_file(tmp_path):
+    proc = _run(tmp_path, ["backup-db"])
+    assert proc.returncode == 0, proc.stderr
+    backups = _backups(tmp_path)
+    assert len(backups) == 1
+    assert backups[0].name.startswith("chat-")
+    assert backups[0].name.endswith(".db")
+    # The backup is a valid SQLite file with the seeded rows.
+    assert _query(tmp_path, "SELECT COUNT(*) FROM users").fetchone()[0] == 2
+    import sqlite3
+
+    con = sqlite3.connect(backups[0])
+    try:
+        n = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    finally:
+        con.close()
+    assert n == 2
+
+
+def test_backup_db_prunes_old(tmp_path):
+    # Make a backup, then backdate its mtime past 30 days; the next backup run
+    # should prune it.
+    proc = _run(tmp_path, ["backup-db"])
+    assert proc.returncode == 0, proc.stderr
+    old = _backups(tmp_path)[0]
+    import os, time
+
+    os.utime(old, (time.time() - 40 * 86400, time.time() - 40 * 86400))
+    proc = _run(tmp_path, ["backup-db"])
+    assert proc.returncode == 0, proc.stderr
+    assert old.name not in {p.name for p in _backups(tmp_path)}
+    assert "Pruned" in proc.stdout
+
+
+def test_backup_db_no_prune_keeps_old(tmp_path):
+    proc = _run(tmp_path, ["backup-db"])
+    assert proc.returncode == 0, proc.stderr
+    old = _backups(tmp_path)[0]
+    import os, time
+
+    os.utime(old, (time.time() - 40 * 86400, time.time() - 40 * 86400))
+    proc = _run(tmp_path, ["backup-db", "--no-prune"])
+    assert proc.returncode == 0, proc.stderr
+    # Old backup is kept (no prune), plus the new one.
+    assert old.name in {p.name for p in _backups(tmp_path)}
