@@ -274,9 +274,10 @@ function openLightbox() {
 }
 .lightbox-img { max-width: 92vw; max-height: 92vh; object-fit: contain; }
 .avatar-clickable { cursor: zoom-in; }
-/* The add-reaction button (inside the Reactions child) is hidden until the
-   whole message is hovered, so it never takes up vertical space. */
-.bubble-col:hover :deep(.reaction-add) { opacity: 1; pointer-events: auto; }
+/* The add-reaction button (inside the Reactions child) fades in when the whole
+   message is hovered. The button is always a live hover target (see
+   Reactions.vue), so once revealed it stays while the cursor is on it. */
+.bubble-col:hover :deep(.reaction-add) { opacity: 1; }
 .avatar-zoom {
   max-width: 100%;
   max-height: 100%;

@@ -100,7 +100,9 @@ function pick(emoji) {
 </template>
 
 <style scoped>
-.reactions { margin-top: 4px; position: relative; }
+/* Sits above the avatar of the next message (a later DOM sibling) so the
+   reactions row, the add button, and the popups stay clickable/visible. */
+.reactions { margin-top: 4px; position: relative; z-index: 5; }
 .reaction-row { display: flex; flex-wrap: wrap; gap: 4px; }
 /* The add-reaction button is absolutely positioned so it never consumes
    vertical space; MessageBubble reveals it on hover via :deep(). When the
@@ -143,19 +145,24 @@ function pick(emoji) {
 .who-name { font-size: 13px; color: var(--text); }
 .reaction-add {
   position: absolute;
-  top: -6px;
+  top: -8px;
   right: 0;
   font-size: 12px;
-  padding: 1px 7px;
+  padding: 2px 8px;
   border-radius: 10px;
   color: var(--text-muted);
   border: 1px dashed var(--border);
   background: var(--bg-elevated);
+  /* Invisible but always a real hover target: once the cursor is over it the
+     button reveals itself and stays (it no longer depends on the parent being
+     hovered, so it can't fade out mid-approach). A generous hit area via the
+     padding makes it easy to reach. */
   opacity: 0;
-  pointer-events: none;
+  cursor: pointer;
   transition: opacity 0.15s;
+  z-index: 12;
 }
-.reaction-add:hover { border-color: var(--text-muted); }
+.reaction-add:hover { opacity: 1; border-color: var(--text-muted); }
 .picker {
   position: absolute;
   bottom: 100%;
