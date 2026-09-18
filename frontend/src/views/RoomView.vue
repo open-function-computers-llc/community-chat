@@ -39,7 +39,22 @@ function scrollToEnd(smooth = true) {
 }
 
 function isOwn(m) {
-  return m.sender?.id === me.value?.id;
+  return m.author?.id === me.value?.id;
+}
+
+// Same message grouping as the group chat: consecutive messages from the same
+// author within a short window render as one run (avatar + name + timestamp
+// only on the first). Family rooms have the same multi-user layout as the
+// group chat, so they get identical grouping.
+const GROUP_GAP_MS = 5 * 60 * 1000; // 5 minutes
+function isGroupStart(i) {
+  const msgs = messages.value;
+  if (i === 0) return true;
+  const cur = msgs[i];
+  const prev = msgs[i - 1];
+  if (cur.author?.id !== prev.author?.id) return true;
+  const gap = new Date(cur.created_at).getTime() - new Date(prev.created_at).getTime();
+  return gap > GROUP_GAP_MS;
 }
 
 function handleWs(msg) {
@@ -97,11 +112,12 @@ onUnmounted(() => {
           <p>Start the conversation with your family members!</p>
         </div>
         <MessageBubble
-          v-for="msg in messages"
+          v-for="(msg, i) in messages"
           :key="msg.id"
           :message="msg"
           channel="room"
           :is-own="isOwn(msg)"
+          :first-in-group="isGroupStart(i)"
         />
       </div>
 

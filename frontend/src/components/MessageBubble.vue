@@ -33,19 +33,26 @@ function openAvatar() {
 }
 
 async function saveEdit() {
-  if (props.channel !== "group") return;
   const trimmed = editText.value.trim();
   if (!trimmed || trimmed === props.message.text) {
     editing.value = false;
     return;
   }
-  await chat.editGroupMessage(props.message.id, trimmed);
+  if (props.channel === "room") {
+    await chat.editRoomMessage(props.message.room_id, props.message.id, trimmed);
+  } else {
+    await chat.editGroupMessage(props.message.id, trimmed);
+  }
   editing.value = false;
 }
 
 async function deleteMessage() {
   if (!confirm("Delete this message?")) return;
-  await chat.deleteGroupMessage(props.message.id);
+  if (props.channel === "room") {
+    await chat.deleteRoomMessage(props.message.room_id, props.message.id);
+  } else {
+    await chat.deleteGroupMessage(props.message.id);
+  }
 }
 
 function isImage(file) {
@@ -70,7 +77,7 @@ function openLightbox() {
 <template>
   <div class="bubble-wrap" :class="{ own: isOwn, continuation: !firstInGroup }">
     <Avatar
-      v-if="!isOwn && channel === 'group' && firstInGroup"
+      v-if="!isOwn && firstInGroup"
       :user="message.author"
       size="sm"
       class="avatar-clickable"
@@ -103,7 +110,7 @@ function openLightbox() {
             v-if="message.text"
             class="text"
             v-html="linkifyHtml(message.text)"
-            @dblclick="channel === 'group' && isOwn && (editing = true)"
+            @dblclick="isOwn && (editing = true)"
           />
           <div v-if="message.file_url" class="file-attach">
             <img
@@ -128,7 +135,7 @@ function openLightbox() {
         :is-own="isOwn"
       />
 
-      <div v-if="isOwn && channel === 'group'" class="actions">
+      <div v-if="isOwn" class="actions">
         <button class="action-btn" @click="menuOpen = !menuOpen">⋯</button>
         <div v-if="menuOpen" class="menu">
           <button @click="editing = true; menuOpen = false; editText = message.text">✏️ Edit</button>

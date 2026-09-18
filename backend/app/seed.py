@@ -84,6 +84,12 @@ def _migrate_sqlite() -> None:
                     text("ALTER TABLE users ADD COLUMN joined_via_invite_id INTEGER REFERENCES invites(id)")
                 )
                 logger.info("Migration: added users.joined_via_invite_id")
+        # room_messages.edited_at
+        if "room_messages" in existing_tables:
+            cols = {c["name"] for c in insp.get_columns("room_messages")}
+            if "edited_at" not in cols:
+                db.execute(text("ALTER TABLE room_messages ADD COLUMN edited_at DATETIME"))
+                logger.info("Migration: added room_messages.edited_at")
         # reactions: swap the old user-to-user dm_message_id for room_message_id.
         # This is a clean break from member-to-member DMs to family rooms; old
         # dm reaction rows are orphaned and dropped.

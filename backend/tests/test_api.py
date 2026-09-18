@@ -339,6 +339,73 @@ def test_family_room_dm():
     assert any(rm["id"] == room_id for rm in r.json())
 
 
+def test_family_room_message_edit_delete():
+    c = client()
+    admin, _ = make_user(c, "heidi", as_admin=True)
+    t2, _ = make_user(c, "ivan", invite=_next_invite(c, admin))
+
+    r = c.post("/api/families", headers=auth(admin), json={"name": "Heidis"})
+    fam_heidi = r.json()["id"]
+    r = c.post("/api/families", headers=auth(admin), json={"name": "Ivans"})
+    fam_ivan = r.json()["id"]
+    _assign_family(c, "heidi", fam_heidi)
+    _assign_family(c, "ivan", fam_ivan)
+
+    r = c.post("/api/dms/rooms", headers=auth(admin), json={"family_id": fam_ivan})
+    room_id = r.json()["id"]
+
+    # Send, edit, delete a room message (parity with the group chat).
+    r = c.post("/api/dms/rooms/%d" % room_id, headers=auth(admin), json={"text": "hello"})
+    msg = r.json()
+    assert msg["edited_at"] is None
+
+    # Author can edit; edited_at is set and the text changes.
+    r = c.patch(
+        "/api/dms/rooms/%d/messages/%d" % (room_id, msg["id"]),
+        headers=auth(admin),
+        json={"text": "edited!"},
+    )
+    assert r.status_code == 200, r.text
+    edited = r.json()
+    assert edited["text"] == "edited!"
+    assert edited["edited_at"] is not None
+
+    # The other family cannot edit the author's message.
+    r = c.patch(
+        "/api/dms/rooms/%d/messages/%d" % (room_id, msg["id"]),
+        headers=auth(t2),
+        json={"text": "hax"},
+    )
+    assert r.status_code == 403
+
+    # Empty text is rejected.
+    r = c.post("/api/dms/rooms/%d" % room_id, headers=auth(admin), json={"text": "x"})
+    xid = r.json()["id"]
+    r = c.patch(
+        "/api/dms/rooms/%d/messages/%d" % (room_id, xid),
+        headers=auth(admin),
+        json={"text": "   "},
+    )
+    assert r.status_code == 400
+
+    # The other family cannot delete the author's message.
+    r = c.delete(
+        "/api/dms/rooms/%d/messages/%d" % (room_id, msg["id"]),
+        headers=auth(t2),
+    )
+    assert r.status_code == 403
+
+    # Author deletes; the message is gone from history.
+    r = c.delete(
+        "/api/dms/rooms/%d/messages/%d" % (room_id, msg["id"]),
+        headers=auth(admin),
+    )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    history = c.get("/api/dms/rooms/%d" % room_id, headers=auth(admin)).json()
+    assert all(m["id"] != msg["id"] for m in history["messages"])
+
+
 def test_admin_user_stats_and_delete():
     c = client()
     admin, _ = make_user(c, "root", as_admin=True)

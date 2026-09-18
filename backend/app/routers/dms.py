@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -57,6 +58,7 @@ def _message_payload(db, msg: RoomMessage) -> dict:
         "file_url": msg.file_url,
         "file_name": msg.file_name,
         "file_content_type": msg.file_content_type,
+        "edited_at": iso_utc(msg.edited_at),
         "created_at": iso_utc(msg.created_at),
         "reactions": _reactions(db, msg.id),
     }
@@ -263,6 +265,66 @@ async def send_room_message(
         )
     )
     return payload
+
+
+@router.patch("/rooms/{room_id}/messages/{msg_id}")
+async def edit_room_message(
+    room_id: int,
+    msg_id: int,
+    data: dict,
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    room = _get_room_or_404(db, room_id)
+    if not _is_member(db, user, room):
+        raise HTTPException(status_code=403, detail="Not a member of this room")
+    msg = db.get(RoomMessage, msg_id)
+    if msg is None or msg.room_id != room_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.sender_id != user.id:
+        raise HTTPException(status_code=403, detail="You can only edit your own messages")
+
+    new_text = (data.get("text") or "").strip()
+    if not new_text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if len(new_text) > 4000:
+        raise HTTPException(status_code=400, detail="Message too long (max 4000 chars)")
+    msg.text = new_text
+    msg.edited_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(msg)
+    payload = _message_payload(db, msg)
+    asyncio.get_event_loop().create_task(
+        hub.broadcast({"type": "dm.edited", "channel": "room", "message": payload})
+    )
+    return payload
+
+
+@router.delete("/rooms/{room_id}/messages/{msg_id}")
+async def delete_room_message(
+    room_id: int,
+    msg_id: int,
+    user: User = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    room = _get_room_or_404(db, room_id)
+    if not _is_member(db, user, room):
+        raise HTTPException(status_code=403, detail="Not a member of this room")
+    msg = db.get(RoomMessage, msg_id)
+    if msg is None or msg.room_id != room_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.sender_id != user.id:
+        raise HTTPException(status_code=403, detail="You can only delete your own messages")
+    message_id = msg.id
+    room_id = msg.room_id
+    db.delete(msg)
+    db.commit()
+    asyncio.get_event_loop().create_task(
+        hub.broadcast(
+            {"type": "dm.deleted", "channel": "room", "room_id": room_id, "message_id": message_id}
+        )
+    )
+    return {"ok": True}
 
 
 def _get_room_message_or_403(db, room_id: int, msg_id: int, user: User) -> RoomMessage:

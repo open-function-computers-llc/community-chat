@@ -231,6 +231,7 @@ class RoomMessage(Base):
     file_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     room: Mapped["DmRoom"] = relationship("DmRoom", back_populates="messages")

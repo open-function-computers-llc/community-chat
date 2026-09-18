@@ -32,6 +32,12 @@ export const useChatStore = defineStore("chat", {
         case "dm.new":
           this._addRoomMessage(msg);
           break;
+        case "dm.edited":
+          this._editRoomMessage(msg.message);
+          break;
+        case "dm.deleted":
+          this._deleteRoomMessage(msg.room_id, msg.message_id);
+          break;
         case "reaction.changed":
           this._updateReaction(msg);
           break;
@@ -140,14 +146,23 @@ export const useChatStore = defineStore("chat", {
       }
       return room;
     },
+    // Room messages arrive with a `sender` field; group messages use `author`.
+    // The shared MessageBubble expects `author`, so normalize room messages at
+    // every point they enter the store. This keeps the UI consistent (it always
+    // reads message.author) instead of special-casing room vs. group.
+    _normalizeRoomMessage(message) {
+      if (message && !message.author) message.author = message.sender;
+      return message;
+    },
     async loadRoomHistory(roomId) {
       const data = await api.get(`/api/dms/rooms/${roomId}`);
-      this.roomMessages[roomId] = data.messages;
+      const messages = (data.messages || []).map((m) => this._normalizeRoomMessage(m));
+      this.roomMessages[roomId] = messages;
       if (data.families) this.roomMeta[roomId] = { families: data.families };
-      return data.messages;
+      return messages;
     },
     _addRoomMessage(msg) {
-      const message = msg.message;
+      const message = this._normalizeRoomMessage(msg.message);
       const roomId = message.room_id;
       if (!this.roomMessages[roomId]) this.roomMessages[roomId] = [];
       if (this.roomMessages[roomId].some((m) => m.id === message.id)) return;
@@ -158,13 +173,34 @@ export const useChatStore = defineStore("chat", {
         room.last_at = message.created_at;
       }
     },
+    _editRoomMessage(message) {
+      const roomId = message.room_id;
+      const msgs = this.roomMessages[roomId];
+      if (!msgs) return;
+      const idx = msgs.findIndex((m) => m.id === message.id);
+      if (idx >= 0) msgs.splice(idx, 1, this._normalizeRoomMessage(message));
+    },
+    _deleteRoomMessage(roomId, messageId) {
+      const msgs = this.roomMessages[roomId];
+      if (!msgs) return;
+      this.roomMessages[roomId] = msgs.filter((m) => m.id !== messageId);
+      const room = this.rooms.find((r) => r.id === roomId);
+      // Refresh the sidebar preview if the last message was the one deleted.
+      if (room && room.last_message?.id === messageId) {
+        const remaining = this.roomMessages[roomId];
+        room.last_message = remaining.length ? remaining[remaining.length - 1] : null;
+        room.last_at = room.last_message?.created_at || null;
+      }
+    },
     async sendRoomMessage(roomId, { text, file_url, file_name, file_content_type }) {
-      const message = await api.post(`/api/dms/rooms/${roomId}`, {
-        text,
-        file_url,
-        file_name,
-        file_content_type,
-      });
+      const message = this._normalizeRoomMessage(
+        await api.post(`/api/dms/rooms/${roomId}`, {
+          text,
+          file_url,
+          file_name,
+          file_content_type,
+        })
+      );
       if (!this.roomMessages[roomId]) this.roomMessages[roomId] = [];
       if (!this.roomMessages[roomId].some((m) => m.id === message.id)) {
         this.roomMessages[roomId].push(message);
@@ -175,6 +211,20 @@ export const useChatStore = defineStore("chat", {
         room.last_at = message.created_at;
       }
       return message;
+    },
+    async editRoomMessage(roomId, messageId, text) {
+      const message = this._normalizeRoomMessage(
+        await api.patch(`/api/dms/rooms/${roomId}/messages/${messageId}`, { text })
+      );
+      const msgs = this.roomMessages[roomId] || [];
+      const idx = msgs.findIndex((m) => m.id === messageId);
+      if (idx >= 0) msgs.splice(idx, 1, message);
+      return message;
+    },
+    async deleteRoomMessage(roomId, messageId) {
+      await api.del(`/api/dms/rooms/${roomId}/messages/${messageId}`);
+      const msgs = this.roomMessages[roomId] || [];
+      this.roomMessages[roomId] = msgs.filter((m) => m.id !== messageId);
     },
     async addRoomReaction(roomId, messageId, emoji) {
       const result = await api.post(`/api/dms/rooms/${roomId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`);
