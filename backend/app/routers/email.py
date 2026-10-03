@@ -274,6 +274,23 @@ def welcome_html(display_name: str) -> str:
     )
 
 
+def test_email_html() -> str:
+    """A fixed, branded message used by the `manage.py test-email` command to
+    verify the SMTP configuration is actually delivering mail."""
+    body = (
+        "<p style='margin:0 0 12px;'>If you can read this, your Community Chat "
+        "email (SMTP) configuration is working.</p>"
+        "<p style='margin:0;'>This is a test message. You don't need to reply.</p>"
+    )
+    return (
+        _BASE_CSS
+        + _header_html("Community Chat — test email")
+        + f'<tr><td style="padding:0 28px 8px;">{body}</td></tr>'
+        + _button_html("Open the app", app_origin() + "/")
+        + _FOOTER
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints (admin can see config state; feature is opt-in via settings)
 # ---------------------------------------------------------------------------

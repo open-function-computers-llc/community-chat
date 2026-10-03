@@ -20,6 +20,8 @@ Subcommands:
     reset-password [<id|handle>]  reset any user's password (auto-generated;
                                   omit the target to list members + usage)
     backup-db               back up the DB to chat-<timestamp>.db + prune >30d
+    test-email <address>    send a fixed test email to verify SMTP is working
+                            (exits 1 + lists required env vars if SMTP unset)
 
 Every subcommand accepts --json to emit machine-readable output.
 """
@@ -48,9 +50,13 @@ os.environ.setdefault(
 )
 
 from app.db import Base, SessionLocal, engine, iso_utc  # noqa: E402
-from app.core.config import email_enabled  # noqa: E402
+from app.core.config import (  # noqa: E402
+    email_enabled,
+    smtp_from_address,
+    smtp_host,
+)
 from app.core.security import hash_password  # noqa: E402
-from app.routers.email import send_password_reset_email  # noqa: E402
+from app.routers.email import send_email, send_password_reset_email, test_email_html  # noqa: E402
 from app.models import (  # noqa: E402
     DMSettings,
     Family,
@@ -661,6 +667,69 @@ def _cmd_backup_db(args) -> int:
     return 0
 
 
+# The env vars that must be set before any email can be sent. Mirrors
+# app.core.config.email_enabled() (host + from address are the hard
+# requirements); we name them explicitly so the operator knows what to add.
+_REQUIRED_SMTP_VARS = ("SMTP_HOST", "SMTP_FROM_ADDRESS")
+
+
+def _cmd_test_email(args) -> int:
+    """Send a fixed test email to the given address using the configured SMTP.
+
+    Exits 1 (with a clear message) when the SMTP configuration is missing, so
+    the operator knows exactly which env vars to set. Exits 0 on a successful
+    send.
+    """
+    if not email_enabled():
+        print("Error: email (SMTP) is not configured.", file=sys.stderr)
+        print(
+            "Set the following environment variables (in the same env file the "
+            "server uses), then re-run:",
+            file=sys.stderr,
+        )
+        for var in _REQUIRED_SMTP_VARS:
+            print(f"    {var}", file=sys.stderr)
+        print(
+            "Optional: SMTP_PORT (default 587), SMTP_USERNAME, SMTP_PASSWORD, "
+            "SMTP_FROM_NAME, SMTP_TIMEOUT.",
+            file=sys.stderr,
+        )
+        return 1
+
+    to_addr = args.address.strip()
+    if not to_addr or "@" not in to_addr:
+        print(f"Error: invalid email address '{args.address}'.", file=sys.stderr)
+        return 1
+
+    # Send synchronously (no background task) and surface the real result.
+    # send_email() is best-effort and returns False (without raising) on any
+    # SMTP error, so we treat False as a failure and report it.
+    sent = send_email(
+        "Community Chat — test email",
+        test_email_html(),
+        to_addr,
+    )
+
+    if args.json:
+        return _emit(
+            args,
+            "Test email sent." if sent else "Test email failed to send.",
+            {"ok": sent, "to": to_addr, "host": smtp_host(), "from": smtp_from_address()},
+        )
+
+    if sent:
+        print(f"Test email sent to {to_addr}.")
+        return 0
+    print(f"Failed to send test email to {to_addr}.", file=sys.stderr)
+    print(
+        "The SMTP server rejected or the send errored. Check SMTP_HOST / "
+        "SMTP_PORT / SMTP_USERNAME / SMTP_PASSWORD and that the server is "
+        "reachable. See the server log for the underlying error.",
+        file=sys.stderr,
+    )
+    return 1
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -758,6 +827,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_json(p)
     p.set_defaults(func=_cmd_backup_db)
+
+    p = sub.add_parser(
+        "test-email",
+        help="Send a fixed test email to the given address to verify SMTP works.",
+    )
+    p.add_argument("address", help="Destination email address for the test message.")
+    _add_json(p)
+    p.set_defaults(func=_cmd_test_email)
 
     return parser
 

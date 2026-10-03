@@ -40,12 +40,15 @@ def _seed_code(tmp: Path) -> str:
     )
 
 
-def _run(tmp: Path, argv, seed: str = None, stdin: str = ""):
+def _run(tmp: Path, argv, seed: str = None, stdin: str = "", extra_env: dict | None = None):
     """Run manage.py in a subprocess against a fresh SQLite file in tmp.
 
     stdin defaults to a closed pipe (capture_output), which means stdin is NOT
     a TTY — the same condition as `docker exec` without -it. Pass `stdin` to
     feed the interactive prompts (password/confirm) through the pipe.
+
+    `extra_env` merges extra environment variables (e.g. SMTP_*) on top of the
+    base env, used to control the email feature's configuration.
     """
     db_path = tmp / "chat.db"
     env = {
@@ -54,6 +57,8 @@ def _run(tmp: Path, argv, seed: str = None, stdin: str = ""):
         "UPLOAD_DIR": str(tmp / "uploads"),
         "PYTHONPATH": str(BACKEND_DIR),
     }
+    if extra_env:
+        env.update(extra_env)
     url = f"sqlite:///{db_path}"
     prelude = (
         f"import os\n"
@@ -400,3 +405,40 @@ def test_backup_db_no_prune_keeps_old(tmp_path):
     assert proc.returncode == 0, proc.stderr
     # Old backup is kept (no prune), plus the new one.
     assert old.name in {p.name for p in _backups(tmp_path)}
+
+
+# --- test-email ------------------------------------------------------------
+def test_test_email_missing_smtp_exits_1_and_lists_vars(tmp_path):
+    # No SMTP_* env vars at all -> email_enabled() is False -> exit 1 with the
+    # required variable names on stderr.
+    proc = _run(tmp_path, ["test-email", "someone@example.com"])
+    assert proc.returncode == 1
+    assert "not configured" in proc.stderr
+    assert "SMTP_HOST" in proc.stderr
+    assert "SMTP_FROM_ADDRESS" in proc.stderr
+
+
+def test_test_email_invalid_address(tmp_path):
+    # SMTP configured but the address is malformed -> exit 1 before sending.
+    proc = _run(
+        tmp_path,
+        ["test-email", "not-an-address"],
+        extra_env={"SMTP_HOST": "localhost", "SMTP_FROM_ADDRESS": "noreply@example.com", "SMTP_PORT": "1025"},
+    )
+    assert proc.returncode == 1
+    assert "invalid email address" in proc.stderr
+
+
+def test_test_email_reaches_send_path_when_configured(tmp_path):
+    # SMTP configured but the host is unreachable (nothing listening on
+    # 127.0.0.1:1) -> the command gets past the "not configured" gate and into
+    # the actual send, which fails -> exit 1 with a "failed to send" message
+    # (NOT the "not configured" one).
+    proc = _run(
+        tmp_path,
+        ["test-email", "someone@example.com"],
+        extra_env={"SMTP_HOST": "127.0.0.1", "SMTP_PORT": "1", "SMTP_FROM_ADDRESS": "noreply@example.com", "SMTP_TIMEOUT": "2"},
+    )
+    assert proc.returncode == 1
+    assert "failed to send" in proc.stderr.lower()
+    assert "not configured" not in proc.stderr
