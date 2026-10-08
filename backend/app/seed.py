@@ -90,6 +90,17 @@ def _migrate_sqlite() -> None:
             if "edited_at" not in cols:
                 db.execute(text("ALTER TABLE room_messages ADD COLUMN edited_at DATETIME"))
                 logger.info("Migration: added room_messages.edited_at")
+        # dm_settings.email_notifications
+        # Added to the model when email notifications shipped, but never
+        # back-filled into existing DBs — any query touching it (e.g. the
+        # cascade in delete-member) crashed with "no such column".
+        if "dm_settings" in existing_tables:
+            cols = {c["name"] for c in insp.get_columns("dm_settings")}
+            if "email_notifications" not in cols:
+                db.execute(
+                    text("ALTER TABLE dm_settings ADD COLUMN email_notifications BOOLEAN NOT NULL DEFAULT 0")
+                )
+                logger.info("Migration: added dm_settings.email_notifications")
         # reactions: swap the old user-to-user dm_message_id for room_message_id.
         # This is a clean break from member-to-member DMs to family rooms; old
         # dm reaction rows are orphaned and dropped.
