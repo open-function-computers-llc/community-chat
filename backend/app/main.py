@@ -145,6 +145,11 @@ class ImmutableFiles(StaticFiles):
 # pin the user to an old JS/CSS build. `no-cache` forces a revalidation.
 _SHELL_CACHE_HEADERS = {"Cache-Control": "no-cache, no-store, must-revalidate"}
 
+# The service worker and manifest must never be cached either: iOS caches the
+# SW script aggressively, so a stale copy keeps running an old push handler
+# long after a deploy. Treat them like the shell.
+_NO_CACHE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}
+
 
 def _shell_response() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html", headers=_SHELL_CACHE_HEADERS)
@@ -162,9 +167,13 @@ if FRONTEND_DIR.exists():
             candidate = (FRONTEND_DIR / full_path).resolve()
             if FRONTEND_DIR.resolve() in candidate.parents and candidate.is_file():
                 # Static files the SPA references directly (e.g. manifest,
-                # icons) — cacheable, but not forever.
-                return FileResponse(
-                    candidate,
-                    headers={"Cache-Control": "public, max-age=3600"},
+                # icons) — cacheable, but not forever. The shell, service
+                # worker, and manifest are excluded: a stale SW pins devices
+                # to an old push handler (especially on iOS).
+                headers = (
+                    _SHELL_CACHE_HEADERS
+                    if candidate.name in _NO_CACHE_FILES
+                    else {"Cache-Control": "public, max-age=3600"}
                 )
+                return FileResponse(candidate, headers=headers)
         return _shell_response()

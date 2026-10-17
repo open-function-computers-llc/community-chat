@@ -1,5 +1,15 @@
 import { reactive } from "vue";
-import { api, getToken } from "@/api";
+import { api } from "@/api";
+import { useAuthStore } from "@/stores/auth";
+
+// Remembers an explicit "turn notifications off" (Settings toggle) per user.
+// Notification.permission stays "granted" after an unsubscribe, so without
+// this the boot-time resync would silently re-enable push against the user's
+// wishes. Subscribe clears it; unsubscribe sets it.
+function optOutKey() {
+  const auth = useAuthStore();
+  return `chat-push-optout:${auth.user?.id ?? "anon"}`;
+}
 
 // Shared reactive state so the Settings toggle and any other view stay in sync.
 const state = reactive({
@@ -72,12 +82,11 @@ export async function subscribePush() {
     // 2. VAPID public key from the server.
     const { public_key } = await api.get("/api/push/key");
     const reg = await getRegistration();
-    const existing = await reg.pushManager.getSubscription();
-    if (existing) {
-      await existing.unsubscribe();
-    }
 
-    // 3. Subscribe (or create a new subscription).
+    // 3. Subscribe. pushManager.subscribe() is idempotent — it returns the
+    //    existing subscription if one is already active. We deliberately do
+    //    NOT unsubscribe first: on iOS that churns (and can fail mid-way,
+    //    leaving the user with nothing).
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: base64UrlToArrayBuffer(public_key),
@@ -90,6 +99,7 @@ export async function subscribePush() {
       keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
     });
 
+    localStorage.removeItem(optOutKey());
     state.subscribed = true;
     return true;
   } catch (err) {
@@ -105,6 +115,9 @@ export async function unsubscribePush() {
   if (!state.supported) return false;
   state.busy = true;
   try {
+    // Record the opt-out *first* so a boot-time resync can't resurrect the
+    // subscription even if the steps below fail halfway.
+    localStorage.setItem(optOutKey(), "1");
     const reg = await getRegistration();
     const sub = await reg.pushManager.getSubscription();
     if (sub) {
@@ -115,6 +128,45 @@ export async function unsubscribePush() {
     return true;
   } finally {
     state.busy = false;
+  }
+}
+
+// Self-heal the push subscription against the server. iOS silently drops or
+// rotates push subscriptions (OS updates, storage eviction, APNs token churn),
+// and the server prunes a subscription row as soon as delivery reports it
+// dead — but the browser keeps believing it is subscribed, so the device goes
+// permanently silent until the user manually re-enables in Settings. Re-POST
+// the live subscription on every app start (the endpoint is an idempotent
+// upsert); if the browser dropped it, re-subscribe silently (no gesture needed
+// once permission is already granted). Best-effort: never throws, never
+// surfaces errors — this runs unattended at boot.
+export async function resyncPush() {
+  if (!state.supported) return;
+  try {
+    if (Notification.permission !== "granted") return;
+    // The user explicitly turned notifications off in Settings — respect that
+    // until they turn them back on.
+    if (localStorage.getItem(optOutKey())) return;
+    const reg = await getRegistration();
+    if (!reg) return;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { public_key } = await api.get("/api/push/key");
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: base64UrlToArrayBuffer(public_key),
+      });
+    }
+    if (!sub) return;
+    const json = sub.toJSON();
+    await api.post("/api/push/subscribe", {
+      endpoint: json.endpoint,
+      keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+    });
+    state.subscribed = true;
+  } catch {
+    // Intentionally silent: at-boot resync must never break the app or nag
+    // the user. The next app start tries again.
   }
 }
 

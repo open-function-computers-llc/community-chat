@@ -22,6 +22,9 @@ Subcommands:
     backup-db               back up the DB to chat-<timestamp>.db + prune >30d
     test-email <address>    send a fixed test email to verify SMTP is working
                             (exits 1 + lists required env vars if SMTP unset)
+    test-push <id|handle>   send a fixed test push to every device registered
+                            for a user; prints a per-device delivery report
+                            (exits 1 + lists required env vars if VAPID unset)
 
 Every subcommand accepts --json to emit machine-readable output.
 """
@@ -52,11 +55,13 @@ os.environ.setdefault(
 from app.db import Base, SessionLocal, engine, iso_utc  # noqa: E402
 from app.core.config import (  # noqa: E402
     email_enabled,
+    push_enabled,
     smtp_from_address,
     smtp_host,
 )
 from app.core.security import hash_password  # noqa: E402
 from app.routers.email import send_email, send_password_reset_email, test_email_html  # noqa: E402
+from app.routers.push import test_push  # noqa: E402
 from app.models import (  # noqa: E402
     DMSettings,
     Family,
@@ -730,6 +735,98 @@ def _cmd_test_email(args) -> int:
     return 1
 
 
+# The env vars required for Web Push (VAPID). Mirrors core.config.push_enabled().
+_REQUIRED_VAPID_VARS = ("VAPID_PRIVATE_KEY", "VAPID_PUBLIC_KEY", "VAPID_EMAIL")
+
+
+def _redact_endpoint(endpoint: str) -> str:
+    """Show enough of a push endpoint to identify the device without printing
+    the (secret) full path."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = urlsplit(endpoint).netloc or "?"
+    except ValueError:
+        host = "?"
+    tail = endpoint[-12:] if len(endpoint) > 12 else endpoint
+    return f"{host}/...{tail}"
+
+
+def _cmd_test_push(args) -> int:
+    """Send a fixed test push to every device registered for a user and print
+    a per-device delivery report. This is the diagnostic for 'user X stopped
+    getting notifications': it distinguishes 'no subscription on record' from
+    'subscription exists but the push service rejects it' from 'delivered, so
+    the problem is on the device (OS permission / Focus mode)'."""
+    if not push_enabled():
+        print("Error: Web Push (VAPID) is not configured.", file=sys.stderr)
+        print(
+            "Set the following environment variables (in the same env file the "
+            "server uses), then re-run:",
+            file=sys.stderr,
+        )
+        for var in _REQUIRED_VAPID_VARS:
+            print(f"    {var}", file=sys.stderr)
+        return 1
+
+    db = _open()
+    try:
+        target = _find_user(db, args.handle)
+        if target is None:
+            print(f"Error: no user '{args.handle}'.", file=sys.stderr)
+            return 1
+
+        results = test_push(db, target.id)
+        delivered = sum(1 for r in results if r["delivered"])
+        devices = [
+            {
+                "endpoint": _redact_endpoint(r["endpoint"]),
+                "delivered": r["delivered"],
+                "pruned": r["pruned"],
+            }
+            for r in results
+        ]
+        pretty = {
+            "ok": bool(devices) and delivered > 0,
+            "user": target.handle,
+            "total": len(devices),
+            "delivered": delivered,
+            "devices": devices,
+        }
+        if args.json:
+            return _emit(args, f"{delivered}/{len(devices)} device(s) accepted the push.", pretty)
+
+        if not devices:
+            print(
+                f"No push subscriptions on record for {target.handle}.\n"
+                "On the device: open the app -> Settings -> Notifications, turn "
+                "notifications on, and accept the OS permission prompt. Then "
+                "re-run this command.",
+                file=sys.stderr,
+            )
+            return 1
+
+        print(f"{target.handle}: {delivered}/{len(devices)} device(s) accepted the push.")
+        for d in devices:
+            mark = "OK  " if d["delivered"] else "FAIL"
+            note = "  (pruned: endpoint is dead; the device re-registers on its next app open)" if d["pruned"] else ""
+            print(f"  [{mark}] {d['endpoint']}{note}")
+
+        if delivered == 0:
+            print(
+                "No device accepted the push. If the toggle is on in the app, "
+                "check the OS side: notifications allowed for the app (Settings "
+                "-> Notifications), Focus / Do-Not-Disturb off, and the device "
+                "online. A stale iOS subscription heals when the user opens the "
+                "app (it re-registers on launch); then re-run this command.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -835,6 +932,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("address", help="Destination email address for the test message.")
     _add_json(p)
     p.set_defaults(func=_cmd_test_email)
+
+    p = sub.add_parser(
+        "test-push",
+        help="Send a fixed test push to a user's registered devices; prints a per-device report.",
+    )
+    p.add_argument("handle", help="User id or handle whose devices should get the test push.")
+    _add_json(p)
+    p.set_defaults(func=_cmd_test_push)
 
     return parser
 

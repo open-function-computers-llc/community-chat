@@ -442,3 +442,146 @@ def test_test_email_reaches_send_path_when_configured(tmp_path):
     assert proc.returncode == 1
     assert "failed to send" in proc.stderr.lower()
     assert "not configured" not in proc.stderr
+
+
+# --- test-push -------------------------------------------------------------
+def _push_keys():
+    """Generate a valid VAPID/subscription key triple (base64url strings):
+    a P-256 private key scalar (VAPID signing) + the matching uncompressed
+    public point (p256dh) + a 16-byte auth secret, so pywebpush can actually
+    encrypt and sign."""
+    import base64
+    import os as _os
+
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    def b64u(b: bytes) -> str:
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    priv = ec.generate_private_key(ec.SECP256R1())
+    priv_scalar = priv.private_numbers().private_value.to_bytes(32, "big")
+    nums = priv.public_key().public_numbers()
+    # Uncompressed SEC1 point: 0x04 || X || Y (65 bytes) — the exact format
+    # push services / pywebpush expect for p256dh.
+    pub_point = b"\x04" + nums.x.to_bytes(32, "big") + nums.y.to_bytes(32, "big")
+    vapid_env = {
+        "VAPID_PRIVATE_KEY": b64u(priv_scalar),
+        "VAPID_PUBLIC_KEY": b64u(pub_point[1:]),  # raw (no 0x04 prefix) — CLI never sends it
+        "VAPID_EMAIL": "mailto:push@example.com",
+    }
+    return vapid_env, b64u(pub_point), b64u(_os.urandom(16))
+
+
+class _FakePushService:
+    """A minimal stand-in for a push service: accepts POSTs and replies with
+    a canned status code."""
+
+    def __init__(self, status=201):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.status = status
+        self.received = 0
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                outer.received += 1
+                self.send_response(outer.status)
+                self.end_headers()
+
+            def log_message(self, *args):  # silence test noise
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def endpoint(self) -> str:
+        # Unique path per subscription (endpoint is the unique key in the DB).
+        port = self.server.server_address[1]
+        import os as _os
+
+        return f"http://127.0.0.1:{port}/push/{_os.urandom(6).hex()}"
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def _push_seed(alice_endpoint: str, p256dh: str, auth: str) -> str:
+    return textwrap.dedent(
+        f"""
+        from app.db import Base, SessionLocal, engine
+        from app.models import User, PushSubscription
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+        s = SessionLocal()
+        admin = User(handle='admin', password_hash='oldhash', is_admin=True)
+        alice = User(handle='alice', password_hash='oldhash', is_admin=False)
+        s.add_all([admin, alice]); s.flush()
+        s.add(PushSubscription(user_id=alice.id, endpoint={alice_endpoint!r},
+                               p256dh={p256dh!r}, auth={auth!r}, enabled=True))
+        s.commit(); s.close()
+        """
+    )
+
+
+def test_test_push_missing_vapid_exits_1_and_lists_vars(tmp_path):
+    proc = _run(tmp_path, ["test-push", "alice"])
+    assert proc.returncode == 1
+    assert "not configured" in proc.stderr
+    for var in ("VAPID_PRIVATE_KEY", "VAPID_PUBLIC_KEY", "VAPID_EMAIL"):
+        assert var in proc.stderr
+
+
+def test_test_push_unknown_user(tmp_path):
+    vapid_env, _, _ = _push_keys()
+    proc = _run(tmp_path, ["test-push", "ghost"], extra_env=vapid_env)
+    assert proc.returncode == 1
+    assert "no user" in proc.stderr
+
+
+def test_test_push_no_subscriptions(tmp_path):
+    vapid_env, _, _ = _push_keys()
+    # Default seed (admin + alice) has no push subscriptions.
+    proc = _run(tmp_path, ["test-push", "alice"], extra_env=vapid_env)
+    assert proc.returncode == 1
+    assert "No push subscriptions on record" in proc.stderr
+
+
+def test_test_push_unreachable_endpoint_reports_fail(tmp_path):
+    vapid_env, p256dh, auth = _push_keys()
+    # Nothing listens on port 9 -> connection errors -> retried, then failed.
+    seed = _push_seed("http://127.0.0.1:9/push/deadbeef", p256dh, auth)
+    proc = _run(tmp_path, ["test-push", "alice"], seed=seed, extra_env=vapid_env)
+    assert proc.returncode == 1
+    assert "0/1 device(s)" in proc.stdout
+    assert "[FAIL]" in proc.stdout
+
+
+def test_test_push_success_all_delivered(tmp_path):
+    vapid_env, p256dh, auth = _push_keys()
+    service = _FakePushService(status=201)
+    try:
+        seed = _push_seed(service.endpoint(), p256dh, auth)
+        proc = _run(tmp_path, ["test-push", "alice"], seed=seed, extra_env=vapid_env)
+    finally:
+        service.stop()
+    assert proc.returncode == 0, proc.stderr
+    assert "1/1 device(s)" in proc.stdout
+    assert "[OK  ]" in proc.stdout
+    assert service.received == 1
+
+
+def test_test_push_dead_endpoint_is_pruned(tmp_path):
+    vapid_env, p256dh, auth = _push_keys()
+    # 410 Gone from the push service -> _send prunes the subscription row.
+    service = _FakePushService(status=410)
+    try:
+        seed = _push_seed(service.endpoint(), p256dh, auth)
+        proc = _run(tmp_path, ["test-push", "alice"], seed=seed, extra_env=vapid_env)
+    finally:
+        service.stop()
+    assert proc.returncode == 1
+    assert "pruned" in proc.stdout
+    assert _query(tmp_path, "SELECT COUNT(*) FROM push_subscriptions").fetchone()[0] == 0

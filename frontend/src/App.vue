@@ -5,6 +5,7 @@ import { useAuthStore, onWsEvent } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
 import NavBar from "@/components/NavBar.vue";
 import Toasts from "@/components/Toasts.vue";
+import { resyncPush } from "@/composables/usePush";
 
 const auth = useAuthStore();
 const chat = useChatStore();
@@ -91,6 +92,10 @@ onMounted(async () => {
     await chat.loadGroupMessages().catch(() => {});
     await chat.loadRooms().catch(() => {});
     requestNotifPermission();
+    // Re-register the push subscription on every app start (idempotent
+    // upsert). iOS silently drops subscriptions server-side; this is what
+    // un-silences a device that has drifted out of sync. Fire-and-forget.
+    resyncPush();
   }
 });
 

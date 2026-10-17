@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -114,33 +115,92 @@ async def unsubscribe(
 # ---------------------------------------------------------------------------
 # Delivery
 # ---------------------------------------------------------------------------
+# Transient push-service failures worth retrying (timeouts surface as
+# connection errors, which are retried too). Anything else 4xx is permanent.
+_TRANSIENT_STATUSES = {408, 429, 500, 502, 503, 504}
+_PUSH_ATTEMPTS = 3
+
+
 def _send(db: Session, sub: PushSubscription, payload: dict[str, Any]) -> bool:
-    """Send one push to one subscription. Returns False if the endpoint is dead
-    (so callers can prune it). Best-effort: other errors are swallowed."""
+    """Send one push to one subscription, retrying transient failures.
+
+    Returns True on delivery. 404/410 (endpoint revoked/expired) prunes the
+    row immediately. Transient failures (connection errors, timeouts, 429,
+    5xx) get a couple of retries with short backoff — one blip from the push
+    service should not silently lose a notification. Any other error is
+    logged and skipped so one bad subscription never blocks the rest.
+    """
     from pywebpush import WebPushException, webpush
 
-    try:
-        webpush(
-            subscription_info=_subscription_info(sub),
-            data=json.dumps(payload, ensure_ascii=False),
-            vapid_private_key=vapid_private_key(),
-            vapid_claims={"sub": vapid_email()},
-            timeout=5,
+    last_exc: Exception | None = None
+    for attempt in range(_PUSH_ATTEMPTS):
+        try:
+            webpush(
+                subscription_info=_subscription_info(sub),
+                data=json.dumps(payload, ensure_ascii=False),
+                vapid_private_key=vapid_private_key(),
+                vapid_claims={"sub": vapid_email()},
+                timeout=5,
+            )
+            return True
+        except WebPushException as exc:
+            status = getattr(exc.response, "status_code", None)
+            if status in (404, 410):
+                # Endpoint gone (user unsubscribed elsewhere / revoked) — prune it.
+                db.delete(sub)
+                db.commit()
+                logger.info("Pruned dead push endpoint for user %s", sub.user_id)
+                return False
+            last_exc = exc
+            if status is not None and status not in _TRANSIENT_STATUSES:
+                # A permanent 4xx (bad keys/payload): retrying cannot help.
+                logger.warning("Push to user %s failed (HTTP %s): %s", sub.user_id, status, exc)
+                return False
+        except Exception as exc:  # noqa: BLE001 - never let push break message delivery
+            last_exc = exc
+        if attempt < _PUSH_ATTEMPTS - 1:
+            time.sleep(0.5 * (attempt + 1))
+
+    logger.warning(
+        "Push to user %s failed after %d attempts: %s", sub.user_id, _PUSH_ATTEMPTS, last_exc
+    )
+    return False
+
+
+def test_push(db: Session, user_id: int) -> list[dict[str, Any]]:
+    """Diagnostic send for `manage.py test-push`: delivers a fixed test
+    payload to every enabled subscription of a user and returns a per-device
+    report. Dead endpoints are pruned by _send() as a side effect (reported
+    back as ``pruned`` so the CLI can tell the operator the device will
+    self-heal on its next app open)."""
+    payload = {
+        "title": "Community Chat — test notification",
+        "body": "If you can see this on this device, push notifications work end to end.",
+        "tag": f"test-push-{int(time.time())}",
+        "icon": "/icon-192.png",
+        "url": "/",
+    }
+    subs = list(
+        db.execute(
+            select(PushSubscription).where(
+                PushSubscription.user_id == user_id,
+                PushSubscription.enabled == True,  # noqa: E712
+            )
+        ).scalars().all()
+    )
+    results = []
+    for sub in subs:
+        sub_id, endpoint = sub.id, sub.endpoint
+        delivered = _send(db, sub, payload)
+        results.append(
+            {
+                "endpoint": endpoint,
+                "delivered": delivered,
+                # False means _send() pruned the row (404/410 from the service).
+                "pruned": db.get(PushSubscription, sub_id) is None,
+            }
         )
-        return True
-    except WebPushException as exc:
-        status = getattr(exc.response, "status_code", None)
-        if status in (404, 410):
-            # Endpoint gone (user unsubscribed elsewhere / revoked) — prune it.
-            db.delete(sub)
-            db.commit()
-            logger.info("Pruned dead push endpoint for user %s", sub.user_id)
-            return False
-        logger.warning("Push to user %s failed (HTTP %s): %s", sub.user_id, status, exc)
-        return False
-    except Exception:  # noqa: BLE001 - never let push break message delivery
-        logger.exception("Push to user %s failed", sub.user_id)
-        return False
+    return results
 
 
 def deliver_to_user(db: Session, user_id: int, payload: dict[str, Any]) -> int:
