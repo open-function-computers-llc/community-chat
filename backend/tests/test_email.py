@@ -245,3 +245,64 @@ def test_render_welcome():
     html = email_mod.welcome_html("Dana")
     assert "Dana" in html
     assert "http://localhost:8983/" in html
+
+
+# --- opportunistic STARTTLS (Mailpit-safety regression) --------------------
+class _StubSMTP:
+    """Stand-in for smtplib.SMTP. Set _StubSMTP.supports_starttls to control
+    whether STARTTLS is advertised; when it isn't, starttls() raises exactly
+    like smtplib does against a plaintext sink such as Mailpit."""
+
+    instances: list = []
+    supports_starttls = True
+
+    def __init__(self, host, port, timeout=None):
+        self.calls = []
+        type(self).instances.append(self)
+
+    def ehlo(self):
+        self.calls.append("ehlo")
+
+    def has_extn(self, name):
+        return name == "starttls" and type(self).supports_starttls
+
+    def starttls(self, *args, **kwargs):
+        if not type(self).supports_starttls:
+            raise smtplib.SMTPNotSupportedError("STARTTLS extension not supported by server.")
+        self.calls.append("starttls")
+
+    def login(self, user, password):
+        self.calls.append(("login", user))
+
+    def send_message(self, msg):
+        self.calls.append(("send", msg["To"]))
+
+    def quit(self):
+        self.calls.append("quit")
+
+
+def test_send_smtp_upgrades_when_starttls_advertised(monkeypatch):
+    import smtplib
+
+    _StubSMTP.instances = []
+    _StubSMTP.supports_starttls = True
+    monkeypatch.setattr(email_mod.smtplib, "SMTP", _StubSMTP)
+    assert email_mod.send_email("subject", "<p>hi</p>", "someone@example.com") is True
+    srv = _StubSMTP.instances[-1]
+    assert "starttls" in srv.calls
+    assert ("send", "someone@example.com") in srv.calls
+
+
+def test_send_smtp_plaintext_when_starttls_not_supported(monkeypatch):
+    # Regression: Mailpit (dev SMTP sink) doesn't advertise STARTTLS. An
+    # unconditional starttls() raised SMTPNotSupportedError and every dev
+    # email silently failed. Plaintext must proceed normally.
+    import smtplib
+
+    _StubSMTP.instances = []
+    _StubSMTP.supports_starttls = False
+    monkeypatch.setattr(email_mod.smtplib, "SMTP", _StubSMTP)
+    assert email_mod.send_email("subject", "<p>hi</p>", "someone@example.com") is True
+    srv = _StubSMTP.instances[-1]
+    assert "starttls" not in srv.calls
+    assert ("send", "someone@example.com") in srv.calls

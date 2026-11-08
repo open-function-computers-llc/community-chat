@@ -56,10 +56,22 @@ services:
   mailpit:
     image: axllent/mailpit:latest
     container_name: community-chat-mailpit
+    # Persist captured messages to a SQLite DB. Without --db-file mailpit is
+    # in-memory only, so this flag is what actually makes the volume below
+    # mean anything.
+    command: ["--db-file=/data/mailpit.db"]
     ports:
       - "3025:8025" # web UI -> host port 3025
       - "1025:1025" # SMTP sink -> host port 1025 (app connects here)
     volumes:
-      # Persist captured messages across container restarts.
-      - ./mailpit:/mailpit
+      # Persist captured messages across container restarts. Must NOT mount
+      # over /mailpit — that's the binary itself (the container's entrypoint),
+      # and the mailpit process runs as an unprivileged user, so a host bind
+      # mount (often root-owned) can't be written to. A named volume handles
+      # ownership correctly.
+      - mailpit-data:/data
     restart: unless-stopped
+
+volumes:
+  # Mailpit's message database (named volume for correct container permissions).
+  mailpit-data:

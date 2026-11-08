@@ -63,7 +63,14 @@ def _send_smtp(subject: str, html: str, to_addr: str) -> None:
         server = smtplib.SMTP(host, port, timeout=smtp_timeout())
     try:
         if port != 465:
-            server.starttls()
+            # Opportunistic STARTTLS: upgrade when the server advertises it
+            # (real providers do), but proceed in plaintext when it doesn't —
+            # local dev sinks like Mailpit only speak plain SMTP, and an
+            # unconditional starttls() would raise SMTPNotSupportedError.
+            server.ehlo()
+            if server.has_extn("starttls"):
+                server.starttls()
+                server.ehlo()  # re-identify over the upgraded connection
         if smtp_username():
             server.login(smtp_username(), smtp_password() or "")
         server.send_message(msg)
