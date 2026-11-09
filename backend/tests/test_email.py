@@ -112,7 +112,7 @@ def test_settings_email_notifications_roundtrip():
     r = c.put(
         "/api/auth/me/settings",
         headers=auth(info["token"]),
-        json={"do_not_disturb": False, "notify_mentions": True, "notify_replies": True, "email_notifications": True},
+        json={"email_notifications": True},
     )
     assert r.status_code == 200, r.text
     assert r.json()["email_notifications"] is True

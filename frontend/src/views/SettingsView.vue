@@ -27,9 +27,6 @@ const currentPassword = ref("");
 const newPassword = ref("");
 const savingPassword = ref(false);
 
-const dnd = ref(false);
-const notifyMentions = ref(true);
-const notifyReplies = ref(true);
 const emailNotifications = ref(false);
 const emailAvailable = ref(false);
 const savingSettings = ref(false);
@@ -58,9 +55,6 @@ onMounted(async () => {
   pushToggle.value = push.subscribed;
   try {
     const s = await api.get("/api/auth/me/settings");
-    dnd.value = s.do_not_disturb;
-    notifyMentions.value = s.notify_mentions;
-    notifyReplies.value = s.notify_replies;
     emailNotifications.value = s.email_notifications;
   } catch {}
   try {
@@ -142,9 +136,6 @@ async function saveSettings() {
   savingSettings.value = true;
   try {
     await api.put("/api/auth/me/settings", {
-      do_not_disturb: dnd.value,
-      notify_mentions: notifyMentions.value,
-      notify_replies: notifyReplies.value,
       email_notifications: emailNotifications.value,
     });
     toast("Settings saved", "success");
@@ -288,18 +279,6 @@ function inviteLink(code) {
             </label>
           </div>
 
-          <label class="toggle-row">
-            <span>Do not disturb</span>
-            <input v-model="dnd" type="checkbox" class="toggle" />
-          </label>
-          <label class="toggle-row">
-            <span>Notify on mentions</span>
-            <input v-model="notifyMentions" type="checkbox" class="toggle" />
-          </label>
-          <label class="toggle-row">
-            <span>Notify on replies</span>
-            <input v-model="notifyReplies" type="checkbox" class="toggle" />
-          </label>
           <button class="btn" @click="saveSettings" :disabled="savingSettings">
             {{ savingSettings ? "Saving…" : "Save settings" }}
           </button>

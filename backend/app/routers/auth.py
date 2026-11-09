@@ -380,18 +380,10 @@ async def get_settings(user: User = Depends(get_current_user), db=Depends(get_db
         settings = DMSettings(user_id=user.id)
         db.add(settings)
         db.commit()
-    return {
-        "do_not_disturb": settings.do_not_disturb,
-        "notify_mentions": settings.notify_mentions,
-        "notify_replies": settings.notify_replies,
-        "email_notifications": settings.email_notifications,
-    }
+    return {"email_notifications": settings.email_notifications}
 
 
 class SettingsUpdate(BaseModel):
-    do_not_disturb: bool
-    notify_mentions: bool
-    notify_replies: bool
     email_notifications: bool
 
 
@@ -401,17 +393,9 @@ async def put_settings(req: SettingsUpdate, user: User = Depends(get_current_use
     if settings is None:
         settings = DMSettings(user_id=user.id)
         db.add(settings)
-    settings.do_not_disturb = req.do_not_disturb
-    settings.notify_mentions = req.notify_mentions
-    settings.notify_replies = req.notify_replies
     settings.email_notifications = req.email_notifications
     db.commit()
-    return {
-        "do_not_disturb": settings.do_not_disturb,
-        "notify_mentions": settings.notify_mentions,
-        "notify_replies": settings.notify_replies,
-        "email_notifications": settings.email_notifications,
-    }
+    return {"email_notifications": settings.email_notifications}
 
 
 @router.post("/me/logout")

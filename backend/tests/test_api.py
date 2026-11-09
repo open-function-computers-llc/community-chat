@@ -122,16 +122,15 @@ def test_profile_update_and_settings():
 
     r = c.get("/api/auth/me/settings", headers=auth(token))
     assert r.status_code == 200
-    assert r.json()["notify_mentions"] is True
+    assert r.json() == {"email_notifications": False}
 
     r = c.put(
         "/api/auth/me/settings",
         headers=auth(token),
-        json={"do_not_disturb": True, "notify_mentions": False, "notify_replies": True, "email_notifications": False},
+        json={"email_notifications": True},
     )
     assert r.status_code == 200
-    assert r.json()["do_not_disturb"] is True
-    assert r.json()["email_notifications"] is False
+    assert r.json()["email_notifications"] is True
 
 
 def test_user_avatar_processed_to_webp():
