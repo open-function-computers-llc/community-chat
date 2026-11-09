@@ -1,0 +1,21 @@
+<!-- Channel Summary digest (nightly or weekly). Filled by
+     app/summary.py via email.py::summary_html. SECTIONS is a pre-rendered
+     block: one bold channel heading with its new-message count followed by
+     "sender: snippet" lines, all built server-side with escaping. -->
+<tr>
+  <td style="padding: 20px 28px 12px;">
+    <div style="font-size: 18px; font-weight: bold;">%%SCOPE_TITLE%%</div>
+  </td>
+</tr>
+<tr>
+  <td style="padding: 0 28px 8px;">
+    <p style="margin: 0 0 8px;">%%GREETING%%</p>
+    <p style="margin: 0; color: #5f6368;">%%INTRO%%</p>
+    %%SECTIONS%%
+  </td>
+</tr>
+<tr>
+  <td style="padding: 16px 28px;">
+    <a href="%%APP_URL%%" target="_blank" style="display: inline-block; background: #4f46e5; color: #ffffff; text-decoration: none; padding: 12px 22px; border-radius: 8px; font-size: 14px; font-weight: bold;">Open Community Chat</a>
+  </td>
+</tr>

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..core.config import app_origin, push_enabled, vapid_email, vapid_private_key, vapid_public_key
 from ..db import get_db
-from ..models import PushSubscription, User
+from ..models import ChannelNotification, PushSubscription, User
 from ..core.security import get_current_user
 
 logger = logging.getLogger("chat.push")
@@ -74,7 +74,6 @@ async def subscribe(
         # Same endpoint: refresh the keys + re-enable (idempotent re-subscribe).
         existing.p256dh = p256dh
         existing.auth = auth
-        existing.enabled = True
         existing.user_id = user.id
         db.commit()
         return {"ok": True, "subscribed": True}
@@ -85,7 +84,6 @@ async def subscribe(
             endpoint=data.endpoint,
             p256dh=p256dh,
             auth=auth,
-            enabled=True,
         )
     )
     db.commit()
@@ -163,13 +161,13 @@ def _deliver(info: dict[str, Any], user_id: int, payload: dict[str, Any]) -> str
     return "failed"
 
 
-def _push_batch(db: Session, subs: list[PushSubscription], payload: dict[str, Any]) -> int:
-    """Push to a snapshot of subscriptions, keeping the DB out of the network
-    phase: all reads finish (and the read transaction is committed) before
-    the first HTTP call, and dead endpoints are pruned in one short write
-    afterwards. A session — and with it an SQLite transaction — must never
-    be held open across push-service round-trips (retries included)."""
-    batch = [(s.id, s.user_id, _subscription_info(s)) for s in subs]
+def _push_batch(db: Session, batch: list[tuple[int, int, dict[str, Any]]], payload: dict[str, Any]) -> int:
+    """Push to a plain (sub_id, user_id, info) snapshot, keeping the DB out
+    of the network phase: all reads finish (and the read transaction is
+    committed) before the first HTTP call, and dead endpoints are pruned in
+    one short write afterwards. A session — and with it an SQLite
+    transaction — must never be held open across push-service round-trips
+    (retries included)."""
     db.commit()  # end the read transaction before going to the network
     results = [_deliver(info, user_id, payload) for _id, user_id, info in batch]
     dead = [sub_id for (sub_id, _u, _i), r in zip(batch, results) if r == "dead"]
@@ -199,7 +197,6 @@ def test_push(db: Session, user_id: int) -> list[dict[str, Any]]:
         db.execute(
             select(PushSubscription).where(
                 PushSubscription.user_id == user_id,
-                PushSubscription.enabled == True,  # noqa: E712
             )
         ).scalars().all()
     )
@@ -219,19 +216,14 @@ def test_push(db: Session, user_id: int) -> list[dict[str, Any]]:
     return results
 
 
-def deliver_to_user(db: Session, user_id: int, payload: dict[str, Any]) -> int:
-    """Push to all of a user's enabled subscriptions. Returns count delivered."""
+def deliver_to_user(
+    db: Session, user_id: int, payload: dict[str, Any], room_id: int | None = None
+) -> int:
+    """Push to every registered device of a user, if the channel's
+    immediate-push setting allows it. Returns count delivered."""
     if not push_enabled():
         return 0
-    subs = list(
-        db.execute(
-            select(PushSubscription).where(
-                PushSubscription.user_id == user_id,
-                PushSubscription.enabled == True,  # noqa: E712
-            )
-        ).scalars().all()
-    )
-    return _push_batch(db, subs, payload)
+    return _push_batch(db, _subs_snapshot(db, {user_id}, room_id), payload)
 
 
 def notify_group(db: Session, sender_id: int, payload: dict[str, Any]) -> int:
@@ -244,17 +236,19 @@ def notify_group(db: Session, sender_id: int, payload: dict[str, Any]) -> int:
             select(User.id).where(User.is_active == True)  # noqa: E712
         ).all()
     }
-    db.commit()  # read phase done
     user_ids.discard(sender_id)
-    return sum(deliver_to_user(db, uid, payload) for uid in user_ids)
+    return _push_batch(db, _subs_snapshot(db, user_ids, None), payload)
 
 
-def notify_room(db: Session, member_ids: set[int], sender_id: int, payload: dict[str, Any]) -> int:
+def notify_room(
+    db: Session, member_ids: set[int], sender_id: int, payload: dict[str, Any],
+    room_id: int | None = None,
+) -> int:
     """Notify every member of a family room except the sender."""
     if not push_enabled():
         return 0
     ids = set(member_ids) - {sender_id}
-    return sum(deliver_to_user(db, uid, payload) for uid in ids)
+    return _push_batch(db, _subs_snapshot(db, ids, room_id), payload)
 
 
 # ---------------------------------------------------------------------------
@@ -271,15 +265,38 @@ import asyncio
 from ..db import SessionLocal
 
 
-def _subs_snapshot(db: Session, user_ids: set[int]) -> list[tuple[int, int, dict[str, Any]]]:
-    """(sub_id, user_id, subscription_info) for every enabled subscription."""
+def _push_opted_in(db: Session, user_ids: set[int], room_id: int | None) -> set[int]:
+    """Who may be pushed for this channel right now. The single decision
+    point: ChannelNotification.immediate_push (default ON — a user with no
+    row yet gets immediate pushes; opt-out writes an explicit False). The
+    PushSubscription rows are pure transport and carry no opinion."""
     if not user_ids:
+        return set()
+    cond = (
+        ChannelNotification.room_id.is_(None)
+        if room_id is None
+        else ChannelNotification.room_id == room_id
+    )
+    opted_out = db.execute(
+        select(ChannelNotification.user_id).where(
+            cond,
+            ChannelNotification.user_id.in_(user_ids),
+            ChannelNotification.immediate_push == False,  # noqa: E712
+        )
+    ).scalars().all()
+    return set(user_ids) - set(opted_out)
+
+
+def _subs_snapshot(
+    db: Session, user_ids: set[int], room_id: int | None = None
+) -> list[tuple[int, int, dict[str, Any]]]:
+    """(sub_id, user_id, subscription_info) for every registered device of
+    the users who are pushable on this channel."""
+    ids = _push_opted_in(db, set(user_ids), room_id)
+    if not ids:
         return []
     subs = db.execute(
-        select(PushSubscription).where(
-            PushSubscription.user_id.in_(user_ids),
-            PushSubscription.enabled == True,  # noqa: E712
-        )
+        select(PushSubscription).where(PushSubscription.user_id.in_(ids))
     ).scalars().all()
     return [(s.id, s.user_id, _subscription_info(s)) for s in subs]
 
@@ -299,10 +316,12 @@ def _collect_group_batch(sender_id: int) -> list[tuple[int, int, dict[str, Any]]
         db.close()
 
 
-def _collect_room_batch(member_ids: set[int], sender_id: int) -> list[tuple[int, int, dict[str, Any]]]:
+def _collect_room_batch(
+    member_ids: set[int], sender_id: int, room_id: int | None
+) -> list[tuple[int, int, dict[str, Any]]]:
     db = SessionLocal()
     try:
-        return _subs_snapshot(db, set(member_ids) - {sender_id})
+        return _subs_snapshot(db, set(member_ids) - {sender_id}, room_id)
     finally:
         db.close()
 
@@ -345,12 +364,12 @@ async def group_push_task(sender_id: int, payload: dict[str, Any]) -> None:
 
 
 async def room_push_task(
-    member_ids: set[int], sender_id: int, payload: dict[str, Any]
+    member_ids: set[int], sender_id: int, payload: dict[str, Any], room_id: int | None = None
 ) -> None:
     if not push_enabled():
         return
     try:
-        batch = _collect_room_batch(member_ids, sender_id)
+        batch = _collect_room_batch(member_ids, sender_id, room_id)
         await _fan_out(batch, payload)
     except Exception:  # noqa: BLE001
         logger.exception("room push fan-out failed")

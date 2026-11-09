@@ -249,7 +249,7 @@ async def send_room_message(
         "room_id": room.id,
     }
     asyncio.get_event_loop().create_task(
-        room_push_task(member_ids=member_ids, sender_id=user.id, payload=push_payload)
+        room_push_task(member_ids=member_ids, sender_id=user.id, payload=push_payload, room_id=room.id)
     )
     # Email notification to opt-in room members (best-effort, background).
     asyncio.get_event_loop().create_task(
@@ -259,6 +259,7 @@ async def send_room_message(
             sender_name=(user.display_name or user.handle),
             text=text,
             room_label=fam_label,
+            room_id=room.id,
         )
     )
     return payload

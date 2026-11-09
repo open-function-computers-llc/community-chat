@@ -1,4 +1,5 @@
 import logging
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,7 +13,8 @@ from sqlalchemy import select
 
 from .db import create_all, get_db, File
 from .seed import seed_admin
-from .routers import auth, dms, email, families, files, invites, messages, push
+from .routers import auth, dms, email, families, files, invites, messages, notifications, push
+from .summary import summary_scheduler
 from .routers.upload_utils import (
     UPLOAD_DIR,
     BROKEN_IMAGE_SVG,
@@ -43,8 +45,10 @@ async def lifespan(app: FastAPI):
     seed_admin()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     await hub.start()
+    summary_task = asyncio.create_task(summary_scheduler())
     logger.info("Server ready")
     yield
+    summary_task.cancel()
     await hub.stop()
 
 
@@ -66,6 +70,7 @@ app.include_router(dms.router, prefix="/api/dms", tags=["dms"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(push.router, prefix="/api/push", tags=["push"])
 app.include_router(email.router, prefix="/api/email", tags=["email"])
+app.include_router(notifications.router, prefix="/api/notifications", tags=["notifications"])
 
 
 @app.websocket("/ws")

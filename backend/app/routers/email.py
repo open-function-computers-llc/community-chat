@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Iterable
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 
 from ..core.config import (
     app_origin,
@@ -39,7 +40,7 @@ from ..core.config import (
     smtp_username,
 )
 from ..db import SessionLocal, get_db
-from ..models import DMSettings, User
+from ..models import ChannelNotification, User
 from ..core.security import get_current_user
 
 logger = logging.getLogger("chat.email")
@@ -138,6 +139,10 @@ TEXT_TEST = (
     "You're receiving this because someone ran the email delivery test on "
     "the Community Chat server."
 )
+TEXT_SUMMARY = (
+    "You're receiving this because you turned on Channel Summaries in "
+    "Community Chat. Change the cadence in Settings."
+)
 
 
 class _Raw(str):
@@ -175,21 +180,30 @@ def _frame(body: _Raw, footer: str = "partials/footer.html") -> _Raw:
 # ---------------------------------------------------------------------------
 # Recipient resolution
 # ---------------------------------------------------------------------------
-def _email_recipients(db, user_ids: Iterable[int]) -> list[tuple[int, str]]:
-    """Return (user_id, email) for each user with a valid email AND email
-    notifications enabled. Uses the user's stored email address directly."""
+def _email_recipients(db, user_ids: Iterable[int], room_id: int | None = None) -> list[tuple[int, str]]:
+    """Return (user_id, email) for each member with a valid email address
+    who turned on immediate email for this channel (ChannelNotification;
+    room_id NULL = group chat). Strictly opt-in: no row means off."""
     ids = list(user_ids)
     if not ids:
         return []
-    out = []
-    for u in db.query(User).filter(User.id.in_(ids), User.email.isnot(None), User.is_active == True).all():  # noqa: E712
-        settings = u.dm_settings
-        if not settings or not settings.email_notifications:
-            continue
-        if not u.email or "@" not in u.email:
-            continue
-        out.append((u.id, u.email))
-    return out
+    cond = (
+        ChannelNotification.room_id.is_(None)
+        if room_id is None
+        else ChannelNotification.room_id == room_id
+    )
+    rows = db.execute(
+        select(ChannelNotification.user_id, User.email)
+        .join(User, User.id == ChannelNotification.user_id)
+        .where(
+            cond,
+            ChannelNotification.user_id.in_(ids),
+            ChannelNotification.immediate_email == True,  # noqa: E712
+            User.is_active == True,  # noqa: E712
+            User.email.isnot(None),
+        )
+    ).all()
+    return [(uid, email) for uid, email in rows if email and "@" in email]
 
 
 # ---------------------------------------------------------------------------
@@ -201,14 +215,17 @@ def _email_recipients(db, user_ids: Iterable[int]) -> list[tuple[int, str]]:
 # session (and its open SQLite transaction) across a slow SMTP round-trip
 # serializes every other request against the single-connection database, and
 # the close()-rollback at task teardown can discard concurrent commits.
-def _targets(db, user_ids: Iterable[int], subject: str, html: str) -> list[tuple[str, str, str]]:
-    return [(subject, html, addr) for _uid, addr in _email_recipients(db, user_ids)]
+def _targets(
+    db, user_ids: Iterable[int], subject: str, html: str, room_id: int | None = None,
+    text: str = TEXT_NOTIFICATIONS,
+) -> list[tuple[str, str, str, str]]:
+    return [(subject, html, addr, text) for _uid, addr in _email_recipients(db, user_ids, room_id)]
 
 
-def _deliver(batch: list[tuple[str, str, str]]) -> int:
+def _deliver(batch: list[tuple[str, str, str, str]]) -> int:
     sent = 0
-    for subject, html, addr in batch:
-        if send_email(subject, html, addr):
+    for subject, html, addr, text in batch:
+        if send_email(subject, html, addr, text=text):
             sent += 1
     return sent
 
@@ -221,18 +238,19 @@ def _group_targets(db, sender_id: int, sender_name: str, text: str) -> list[tupl
         r[0] for r in db.query(User.id).filter(User.is_active == True).all()  # noqa: E712
     }
     user_ids.discard(sender_id)
-    return _targets(db, user_ids, _group_subject(text), _group_html(sender_name, text))
+    return _targets(db, user_ids, _group_subject(text), _group_html(sender_name, text), None)
 
 
 def _room_targets(
-    db, member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str
+    db, member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str,
+    room_id: int | None = None,
 ) -> list[tuple[str, str, str]]:
     """Resolve (subject, html, address) triples for a new family-room message."""
     if not email_enabled():
         return []
     ids = set(member_ids) - {sender_id}
     return _targets(
-        db, ids, _group_subject(text), _group_html(sender_name, text, room_label)
+        db, ids, _group_subject(text), _group_html(sender_name, text, room_label), room_id
     )
 
 
@@ -241,9 +259,13 @@ def notify_group(db, sender_id: int, sender_name: str, text: str) -> int:
     return _deliver(_group_targets(db, sender_id, sender_name, text))
 
 
-def notify_room(db, member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str) -> int:
-    """Email every opt-in room member (except the sender) about a new message."""
-    return _deliver(_room_targets(db, member_ids, sender_id, sender_name, text, room_label))
+def notify_room(
+    db, member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str,
+    room_id: int | None = None,
+) -> int:
+    """Email every room member with immediate email on for this room
+    (except the sender) about a new message."""
+    return _deliver(_room_targets(db, member_ids, sender_id, sender_name, text, room_label, room_id))
 
 
 def _group_subject(text: str) -> str:
@@ -340,6 +362,24 @@ def test_email_html() -> str:
     )
 
 
+def summary_html(display_name: str, scope_title: str, intro: str, sections_html: str) -> str:
+    """A Channel Summary digest. sections_html must already be escaped
+    (app/summary.py builds it from message data through _esc)."""
+    name = (display_name or "").split()[0] if display_name else ""
+    greeting = f"Hey{f' {name}' if name else ''},"
+    return _frame(
+        _merge(
+            "channel_summary.html",
+            SCOPE_TITLE=scope_title,
+            GREETING=greeting,
+            INTRO=intro,
+            SECTIONS=_Raw(sections_html),
+            APP_URL=app_origin() + "/",
+        ),
+        footer="partials/footer_summary.html",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints (admin can see config state; feature is opt-in via settings)
 # ---------------------------------------------------------------------------
@@ -370,11 +410,12 @@ def _collect_group_batch(sender_id: int, sender_name: str, text: str) -> list[tu
 
 
 def _collect_room_batch(
-    member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str
+    member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str,
+    room_id: int | None = None,
 ) -> list[tuple[str, str, str]]:
     db = SessionLocal()
     try:
-        return _room_targets(db, member_ids, sender_id, sender_name, text, room_label)
+        return _room_targets(db, member_ids, sender_id, sender_name, text, room_label, room_id)
     finally:
         db.close()
 
@@ -409,10 +450,11 @@ async def group_email_task(sender_id: int, sender_name: str, text: str) -> None:
 
 
 async def room_email_task(
-    member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str
+    member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str,
+    room_id: int | None = None,
 ) -> None:
     try:
-        batch = _collect_room_batch(member_ids, sender_id, sender_name, text, room_label)
+        batch = _collect_room_batch(member_ids, sender_id, sender_name, text, room_label, room_id)
     except Exception:  # noqa: BLE001
         logger.exception("room email fan-out failed")
         return

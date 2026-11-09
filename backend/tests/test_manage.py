@@ -520,7 +520,7 @@ def _push_seed(alice_endpoint: str, p256dh: str, auth: str) -> str:
         alice = User(handle='alice', password_hash='oldhash', is_admin=False)
         s.add_all([admin, alice]); s.flush()
         s.add(PushSubscription(user_id=alice.id, endpoint={alice_endpoint!r},
-                               p256dh={p256dh!r}, auth={auth!r}, enabled=True))
+                               p256dh={p256dh!r}, auth={auth!r}))
         s.commit(); s.close()
         """
     )

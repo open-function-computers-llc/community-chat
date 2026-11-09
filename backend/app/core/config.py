@@ -78,3 +78,40 @@ def email_enabled() -> bool:
     """Email requires a host + a From address. Without both, sends are skipped
     and the settings endpoint reports the feature unavailable."""
     return bool(smtp_host() and smtp_from_address())
+
+
+def _hhmm(name: str, default: str) -> tuple[int, int]:
+    raw = os.environ.get(name, default).strip() or default
+    try:
+        hh, mm = raw.split(":", 1)
+        h, m = int(hh), int(mm)
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return h, m
+    except ValueError:
+        pass
+    hh, mm = default.split(":", 1)
+    return int(hh), int(mm)
+
+
+def summary_enabled() -> bool:
+    """Channel Summary scheduler on/off (SUMMARY_ENABLED=0 disables)."""
+    return os.environ.get("SUMMARY_ENABLED", "1").strip() != "0"
+
+
+def summary_nightly_time() -> tuple[int, int]:
+    """UTC HH:MM the nightly summary runs (default 02:00 UTC ≈ evening US)."""
+    return _hhmm("SUMMARY_NIGHTLY_UTC", "02:00")
+
+
+def summary_weekly_time() -> tuple[int, int]:
+    """UTC HH:MM the weekly summary runs on its weekday (default 02:30)."""
+    return _hhmm("SUMMARY_WEEKLY_UTC", "02:30")
+
+
+def summary_weekly_weekday() -> int:
+    """Python weekday() the weekly summary runs on (Mon=0 … Sat=5, Sun=6)."""
+    try:
+        d = int(os.environ.get("SUMMARY_WEEKLY_WEEKDAY", "5"))
+        return d if 0 <= d <= 6 else 5
+    except ValueError:
+        return 5

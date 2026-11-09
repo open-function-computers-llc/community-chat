@@ -13,7 +13,6 @@ from .upload_utils import IMAGE_CONTENT_TYPES, delete_file, process_avatar, publ
 
 from ..db import SessionLocal, get_db, iso_utc
 from ..models import (
-    DMSettings,
     Family,
     File,
     GroupMessage,
@@ -304,8 +303,7 @@ async def delete_user(
     for f in files:
         delete_file(f"/uploads/{f.storage_name}")
         db.delete(f)
-    # DM settings.
-    db.execute(delete(DMSettings).where(DMSettings.user_id == uid))
+    # Channel notification settings ride the User.channel_settings cascade.
     # Clear invite links that point at them (keep the invites themselves).
     for inv in db.execute(select(Invite).where(Invite.created_by == uid)).scalars().all():
         inv.created_by = None
@@ -371,31 +369,6 @@ async def change_password(req: PasswordUpdate, user: User = Depends(get_current_
     user.password_hash = hash_password(req.new_password)
     db.commit()
     return {"ok": True}
-
-
-@router.get("/me/settings")
-async def get_settings(user: User = Depends(get_current_user), db=Depends(get_db)):
-    settings = user.dm_settings
-    if settings is None:
-        settings = DMSettings(user_id=user.id)
-        db.add(settings)
-        db.commit()
-    return {"email_notifications": settings.email_notifications}
-
-
-class SettingsUpdate(BaseModel):
-    email_notifications: bool
-
-
-@router.put("/me/settings")
-async def put_settings(req: SettingsUpdate, user: User = Depends(get_current_user), db=Depends(get_db)):
-    settings = user.dm_settings
-    if settings is None:
-        settings = DMSettings(user_id=user.id)
-        db.add(settings)
-    settings.email_notifications = req.email_notifications
-    db.commit()
-    return {"email_notifications": settings.email_notifications}
 
 
 @router.post("/me/logout")

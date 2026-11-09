@@ -17,6 +17,7 @@ _tmp = tempfile.mkdtemp(prefix="chat-it-")
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["DATA_DIR"] = _tmp
 os.environ["UPLOAD_DIR"] = os.path.join(_tmp, "uploads")
+os.environ["SUMMARY_ENABLED"] = "0"  # keep the digest loop out of tests
 os.environ["ADMIN_HANDLE"] = "admin"
 os.environ["ADMIN_PASSWORD"] = "adminpass123"
 

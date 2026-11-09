@@ -120,18 +120,6 @@ def test_profile_update_and_settings():
     assert r.json()["display_name"] == "Bobby"
     assert r.json()["bio"] == "hi"
 
-    r = c.get("/api/auth/me/settings", headers=auth(token))
-    assert r.status_code == 200
-    assert r.json() == {"email_notifications": False}
-
-    r = c.put(
-        "/api/auth/me/settings",
-        headers=auth(token),
-        json={"email_notifications": True},
-    )
-    assert r.status_code == 200
-    assert r.json()["email_notifications"] is True
-
 
 def test_user_avatar_processed_to_webp():
     c = client()

@@ -25,6 +25,10 @@ Subcommands:
     test-push <id|handle>   send a fixed test push to every device registered
                             for a user; prints a per-device delivery report
                             (exits 1 + lists required env vars if VAPID unset)
+    run-summaries <scope>   run a Channel Summary digest NOW (scope: nightly
+                            or weekly) for every member who opted in; prints
+                            send counts. The scheduler runs these on a UTC
+                            schedule; this command is for testing/backfill
 
 Every subcommand accepts --json to emit machine-readable output.
 """
@@ -62,8 +66,8 @@ from app.core.config import (  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.routers.email import send_email, send_password_reset_email, test_email_html, TEXT_TEST  # noqa: E402
 from app.routers.push import test_push  # noqa: E402
+from app.summary import run_summary, SCOPES  # noqa: E402
 from app.models import (  # noqa: E402
-    DMSettings,
     Family,
     File,
     GroupMessage,
@@ -287,7 +291,7 @@ def _cmd_delete_member(args) -> int:
         for f in db.execute(select(File).where(File.owner_id == uid)).scalars().all():
             delete_file(f"/uploads/{f.storage_name}")
             db.delete(f)
-        db.execute(delete(DMSettings).where(DMSettings.user_id == uid))
+        # Channel notification settings ride the User.channel_settings cascade.
         for inv in db.execute(select(Invite).where(Invite.created_by == uid)).scalars().all():
             inv.created_by = None
         db.delete(target)
@@ -759,6 +763,30 @@ def _redact_endpoint(endpoint: str) -> str:
     return f"{host}/...{tail}"
 
 
+def _cmd_run_summaries(args) -> int:
+    """Run a Channel Summary digest immediately. Deliberately ignores the
+    scheduler's run marker (a manual run is a manual run), so this can be
+    used to backfill or test without disturbing the schedule. Sends only to
+    members who opted into this digest on at least one channel, and only
+    channels that actually had activity in the window."""
+    db = _open()
+    try:
+        stats = run_summary(db, args.scope)
+    finally:
+        db.close()
+    pretty = {
+        "ok": True,
+        "scope": args.scope,
+        **stats,
+    }
+    return _emit(
+        args,
+        f"Summary '{args.scope}': {stats['emails_sent']} email(s) sent, "
+        f"{stats['pushes_delivered']}/{stats['pushes_total']} push(es) delivered.",
+        pretty,
+    )
+
+
 def _cmd_test_push(args) -> int:
     """Send a fixed test push to every device registered for a user and print
     a per-device delivery report. This is the diagnostic for 'user X stopped
@@ -939,6 +967,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("address", help="Destination email address for the test message.")
     _add_json(p)
     p.set_defaults(func=_cmd_test_email)
+
+    p = sub.add_parser(
+        "run-summaries",
+        help="Run a Channel Summary digest now (nightly|weekly) for all opted-in members.",
+    )
+    p.add_argument("scope", choices=list(SCOPES), help="Which digest to run.")
+    _add_json(p)
+    p.set_defaults(func=_cmd_run_summaries)
 
     p = sub.add_parser(
         "test-push",

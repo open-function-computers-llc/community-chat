@@ -31,7 +31,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
-from app.models import DMSettings, Invite, User  # noqa: E402
+from app.models import ChannelNotification, Invite, User  # noqa: E402
 from app.routers import email as email_mod  # noqa: E402
 
 
@@ -73,12 +73,22 @@ def _make_user(c, handle, email=None, admin=False, invite=None):
     return data
 
 
-def _opt_in(handle, enabled=True):
+def _opt_in(handle, enabled=True, room_id=None):
+    """Toggle immediate email for a channel (room_id None = group chat)."""
     db = SessionLocal()
     u = db.query(User).filter(User.handle == handle).first()
-    if u.dm_settings is None:
-        u.dm_settings = DMSettings(user_id=u.id)
-    u.dm_settings.email_notifications = enabled
+    cond = (
+        ChannelNotification.room_id.is_(None)
+        if room_id is None
+        else ChannelNotification.room_id == room_id
+    )
+    row = db.query(ChannelNotification).filter(
+        ChannelNotification.user_id == u.id, cond
+    ).first()
+    if row is None:
+        row = ChannelNotification(user_id=u.id, room_id=room_id)
+        db.add(row)
+    row.immediate_email = enabled
     db.commit()
     db.close()
 
@@ -104,20 +114,6 @@ def test_email_status_no_email():
     info = _make_user(c, "noemail", admin=True)
     r = c.get("/api/email/status", headers=auth(info["token"]))
     assert r.json() == {"enabled": True, "has_email": False}
-
-
-def test_settings_email_notifications_roundtrip():
-    c = client()
-    info = _make_user(c, "sara", email="sara@test.example", admin=True)
-    r = c.put(
-        "/api/auth/me/settings",
-        headers=auth(info["token"]),
-        json={"email_notifications": True},
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["email_notifications"] is True
-    r = c.get("/api/auth/me/settings", headers=auth(info["token"]))
-    assert r.json()["email_notifications"] is True
 
 
 def test_notify_group_only_opt_in(monkeypatch):

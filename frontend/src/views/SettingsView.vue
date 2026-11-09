@@ -27,9 +27,15 @@ const currentPassword = ref("");
 const newPassword = ref("");
 const savingPassword = ref(false);
 
-const emailNotifications = ref(false);
 const emailAvailable = ref(false);
 const savingSettings = ref(false);
+const channels = ref([]);
+let channelsSnapshot = "[]";
+const NOTIF_ROWS = [
+  { key: "immediate", label: "Instant", hint: "each new message" },
+  { key: "nightly", label: "Nightly", hint: "once-a-day recap" },
+  { key: "weekly", label: "Weekly", hint: "Saturday recap" },
+];
 
 const push = usePush();
 // Local checkbox state. Bound to the input so a failed subscribe (which leaves
@@ -54,9 +60,11 @@ onMounted(async () => {
   await pushStatus();
   pushToggle.value = push.subscribed;
   try {
-    const s = await api.get("/api/auth/me/settings");
-    emailNotifications.value = s.email_notifications;
-  } catch {}
+    channels.value = await api.get("/api/notifications/channels");
+    channelsSnapshot = JSON.stringify(channels.value);
+  } catch {
+    channels.value = [];
+  }
   try {
     const e = await api.get("/api/email/status");
     emailAvailable.value = e.enabled && e.has_email;
@@ -135,10 +143,15 @@ async function changePassword() {
 async function saveSettings() {
   savingSettings.value = true;
   try {
-    await api.put("/api/auth/me/settings", {
-      email_notifications: emailNotifications.value,
-    });
-    toast("Settings saved", "success");
+    const dirty = channels.value.filter((ch, i) => JSON.stringify(ch) !== JSON.stringify(JSON.parse(channelsSnapshot)[i]));
+    for (const ch of dirty) {
+      await api.put("/api/notifications/channels", {
+        room_id: ch.room_id,
+        ...ch.settings,
+      });
+    }
+    channelsSnapshot = JSON.stringify(channels.value);
+    toast("Notification settings saved", "success");
   } catch (e) {
     toast(e.message, "error");
   } finally {
@@ -247,7 +260,7 @@ function inviteLink(code) {
                 <small v-if="!push.supported">Not supported in this browser</small>
                 <small v-else-if="push.permission === 'denied'">Blocked — re-enable in your browser's site settings</small>
                 <small v-else-if="push.permission === 'default'">Alerts when a new message arrives and the app is closed</small>
-                <small v-else-if="push.subscribed">On — you'll get alerts for new group &amp; family messages</small>
+                <small v-else-if="push.subscribed">On — instant alerts on any channel with Push enabled below</small>
               </span>
               <input
                 type="checkbox"
@@ -260,23 +273,43 @@ function inviteLink(code) {
             <p v-if="push.error" class="push-error">{{ push.error }}</p>
           </div>
 
-          <!-- Email notifications (delivered to the profile email address) -->
-          <div class="push-block">
-            <label class="toggle-row">
-              <span class="push-label">
-                <span>Email notifications</span>
-                <small v-if="!emailAvailable && !me.email">Add an email in your profile to use this</small>
-                <small v-else-if="!emailAvailable">Not available on this server yet</small>
-                <small v-else-if="emailNotifications">On — new messages will be emailed to {{ me.email }}</small>
-                <small v-else>Off — you'll only get alerts in the app</small>
-              </span>
-              <input
-                type="checkbox"
-                class="toggle"
-                v-model="emailNotifications"
-                :disabled="!emailAvailable"
-              />
-            </label>
+          <!-- Per-channel matrix: instant messages + nightly/weekly digests,
+               each via email or push. Settings are saved per channel. -->
+          <div v-for="ch in channels" :key="String(ch.room_id)" class="push-block">
+            <div class="channel-head">{{ ch.name }}</div>
+            <table class="channel-matrix">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Email</th>
+                  <th>Push</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in NOTIF_ROWS" :key="row.key">
+                  <td class="channel-row-label">
+                    {{ row.label }}
+                    <small>{{ row.hint }}</small>
+                  </td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      class="toggle"
+                      v-model="ch.settings[`${row.key}_email`]"
+                      :disabled="!emailAvailable"
+                      :title="!emailAvailable ? 'Add an email in your profile to use this' : ''"
+                    />
+                  </td>
+                  <td>
+                    <input type="checkbox" class="toggle" v-model="ch.settings[`${row.key}_push`]" />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <small class="channel-note">
+              Recaps only arrive for channels that had activity.
+              <template v-if="!emailAvailable"> Email options need an address in your profile.</template>
+            </small>
           </div>
 
           <button class="btn" @click="saveSettings" :disabled="savingSettings">
@@ -477,6 +510,21 @@ function inviteLink(code) {
 .push-label { display: flex; flex-direction: column; gap: 2px; }
 .push-label small { color: var(--text-muted); font-size: 11px; font-weight: 400; }
 .push-error { color: var(--danger); font-size: 12px; }
+.channel-head { font-weight: 600; font-size: 13px; color: var(--text); }
+.channel-matrix { width: 100%; border-collapse: collapse; }
+.channel-matrix th {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-align: center;
+  padding-bottom: 4px;
+}
+.channel-matrix th:first-child { text-align: left; }
+.channel-matrix td { padding: 6px 0; text-align: center; vertical-align: middle; }
+.channel-matrix td:first-child { text-align: left; }
+.channel-row-label { font-size: 13px; color: var(--text); }
+.channel-row-label small { display: block; color: var(--text-muted); font-size: 11px; }
+.channel-note { color: var(--text-muted); font-size: 11px; }
 .invite-create {
   display: flex;
   flex-direction: column;

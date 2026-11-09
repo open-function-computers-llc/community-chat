@@ -89,9 +89,11 @@ class User(Base):
 
     family: Mapped["Family | None"] = relationship("Family", foreign_keys=[family_id], back_populates="members")
     invites_used: Mapped[list["Invite"]] = relationship("Invite", foreign_keys="Invite.user_id")
-    dm_settings: Mapped["DMSettings | None"] = relationship("DMSettings", uselist=False, back_populates="user", cascade="all, delete-orphan")
     push_subscriptions: Mapped[list["PushSubscription"]] = relationship(
         "PushSubscription", foreign_keys="PushSubscription.user_id", cascade="all, delete-orphan"
+    )
+    channel_settings: Mapped[list["ChannelNotification"]] = relationship(
+        "ChannelNotification", cascade="all, delete-orphan"
     )
 
 
@@ -144,21 +146,71 @@ class PushSubscription(Base):
     endpoint: Mapped[str] = mapped_column(String(1024), unique=True, nullable=False)
     p256dh: Mapped[str] = mapped_column(String(255), nullable=False)
     auth: Mapped[str] = mapped_column(String(255), nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped["User"] = relationship("User", foreign_keys=[user_id], back_populates="push_subscriptions")
 
 
-class DMSettings(Base):
-    __tablename__ = "dm_settings"
+class ChannelNotification(Base):
+    """Per-user, per-channel notification matrix ("Channel Summary").
+
+    room_id NULL = the Group Chat channel (every member is in it); otherwise
+    a family room. A row exists only once the user has saved settings for
+    that channel — absence means the defaults below, so new channels (and
+    existing users) start: immediate push on (subject to having a subscribed
+    device), immediate email off, and all digests off (summaries are
+    strictly opt-in).
+    """
+    __tablename__ = "channel_notifications"
+    __table_args__ = (
+        UniqueConstraint("user_id", "room_id", name="unique_user_channel_room"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, nullable=False)
-    email_notifications: Mapped[bool] = mapped_column(Boolean, default=False)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    room_id: Mapped[int | None] = mapped_column(
+        ForeignKey("dm_rooms.id", ondelete="CASCADE"), nullable=True
+    )
 
-    user: Mapped["User"] = relationship("User", back_populates="dm_settings")
+    immediate_email: Mapped[bool] = mapped_column(Boolean, default=False)
+    immediate_push: Mapped[bool] = mapped_column(Boolean, default=True)
+    nightly_email: Mapped[bool] = mapped_column(Boolean, default=False)
+    nightly_push: Mapped[bool] = mapped_column(Boolean, default=False)
+    weekly_email: Mapped[bool] = mapped_column(Boolean, default=False)
+    weekly_push: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+CHANNEL_SETTING_FIELDS = (
+    "immediate_email",
+    "immediate_push",
+    "nightly_email",
+    "nightly_push",
+    "weekly_email",
+    "weekly_push",
+)
+
+# What a user gets on a channel they've never configured: immediate pushes
+# on (for devices they registered), all email and all digests off.
+CHANNEL_DEFAULTS = {
+    "immediate_email": False,
+    "immediate_push": True,
+    "nightly_email": False,
+    "nightly_push": False,
+    "weekly_email": False,
+    "weekly_push": False,
+}
+
+
+class DigestRun(Base):
+    """Last-run marker for the Channel Summary scheduler (restart-safe: a
+    process that comes back after its slot must not double-send)."""
+    __tablename__ = "digest_runs"
+
+    scope: Mapped[str] = mapped_column(String(16), primary_key=True)
+    last_run_date: Mapped[str] = mapped_column(String(10), nullable=False)
 
 
 class File(Base):

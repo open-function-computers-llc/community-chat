@@ -126,12 +126,50 @@ def _migrate_sqlite() -> None:
         db.close()
 
 
+def _migrate_channel_settings() -> None:
+    """One-time behavior carry-over into channel_notifications: users who
+    had opted into the retired global dm_settings.email_notifications flag
+    get an explicit group-channel row with immediate_email on. Idempotent —
+    users who already have a group row (any value) are left alone, so this
+    never re-enables email the user has since turned off."""
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+    if "dm_settings" not in tables or "channel_notifications" not in tables:
+        return
+    if "email_notifications" not in {c["name"] for c in insp.get_columns("dm_settings")}:
+        return
+    from .models import ChannelNotification
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                "SELECT ds.user_id FROM dm_settings ds "
+                "JOIN users u ON u.id = ds.user_id "
+                "WHERE ds.email_notifications = 1 AND u.is_active = 1 "
+                "AND NOT EXISTS (SELECT 1 FROM channel_notifications cn "
+                "WHERE cn.user_id = ds.user_id AND cn.room_id IS NULL)"
+            )
+        ).all()
+        if rows:
+            for (uid,) in rows:
+                db.add(ChannelNotification(user_id=uid, room_id=None, immediate_email=True))
+            db.commit()
+            logger.info(
+                "Migration: carried %d global email opt-in(s) into channel_notifications",
+                len(rows),
+            )
+    finally:
+        db.close()
+
+
 def seed_admin() -> None:
     """Create tables + run migrations + ensure the admin user exists."""
     # create_all makes any missing tables (e.g. families) without touching
     # existing ones, so it's safe to run before the column migration.
     Base.metadata.create_all(engine)
     _migrate_sqlite()
+    _migrate_channel_settings()
 
     import os
 

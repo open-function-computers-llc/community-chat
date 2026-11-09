@@ -1,7 +1,9 @@
 """Re-export ORM models from db.py for clean import paths."""
 from .db import (
     Base,
-    DMSettings,
+    CHANNEL_SETTING_FIELDS,
+    ChannelNotification,
+    DigestRun,
     DmRoom,
     DmRoomFamily,
     Family,
@@ -17,7 +19,9 @@ from .db import (
 
 __all__ = [
     "Base",
-    "DMSettings",
+    "CHANNEL_SETTING_FIELDS",
+    "ChannelNotification",
+    "DigestRun",
     "DmRoom",
     "DmRoomFamily",
     "Family",
