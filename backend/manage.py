@@ -634,8 +634,14 @@ def _cmd_backup_db(args) -> int:
 
     # Use SQLite's online backup API (not a raw copy) so the snapshot is
     # internally consistent even while the app is writing to the live DB.
+    # The timestamp is second-granular; the suffix keeps two backups made in
+    # the same second from overwriting each other (scripted/CI runs).
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     dest = db_file.parent / f"{db_file.stem}-{stamp}.db"
+    dup = 1
+    while dest.exists():
+        dup += 1
+        dest = db_file.parent / f"{db_file.stem}-{stamp}-{dup}.db"
     src = sqlite3.connect(str(db_file))
     try:
         dst = sqlite3.connect(str(dest))

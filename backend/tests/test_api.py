@@ -479,6 +479,75 @@ def test_admin_user_stats_and_delete():
     assert r.status_code == 401
 
 
+def test_admin_update_member_fields():
+    c = client()
+    admin, _ = make_user(c, "root", as_admin=True)
+    t_bob, ubob = make_user(c, "bob", invite=_next_invite(c, admin))
+
+    fam = c.post("/api/families", headers=auth(admin), json={"name": "Bobs"}).json()
+
+    # Admin sets the basics (the Edit modal sends all fields on save).
+    r = c.patch(
+        "/api/auth/admin/users/%d" % ubob["id"],
+        headers=auth(admin),
+        json={
+            "display_name": "Bob Bobson",
+            "email": "bob@example.com",
+            "phone": "555-1234",
+            "family_id": fam["id"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["display_name"] == "Bob Bobson"
+    assert body["email"] == "bob@example.com"
+    assert body["phone"] == "555-1234"
+    assert body["family_name"] == "Bobs"
+
+    # Malformed email is rejected by validation.
+    r = c.patch(
+        "/api/auth/admin/users/%d" % ubob["id"],
+        headers=auth(admin),
+        json={"email": "not-an-email"},
+    )
+    assert r.status_code == 422
+
+    # Unknown family is rejected.
+    r = c.patch(
+        "/api/auth/admin/users/%d" % ubob["id"],
+        headers=auth(admin),
+        json={"family_id": 99999},
+    )
+    assert r.status_code == 400
+
+    # Sending nulls clears the fields (display_name falls back to handle).
+    r = c.patch(
+        "/api/auth/admin/users/%d" % ubob["id"],
+        headers=auth(admin),
+        json={"display_name": None, "email": None, "phone": None, "family_id": None},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["email"] is None and body["phone"] is None and body["family_id"] is None
+    assert body["display_name"] == "bob"
+
+    # Non-admins cannot use the endpoint.
+    r = c.patch(
+        "/api/auth/admin/users/%d" % ubob["id"],
+        headers=auth(t_bob),
+        json={"display_name": "hax"},
+    )
+    assert r.status_code == 403
+
+    # Unknown user is 404.
+    r = c.patch(
+        "/api/auth/admin/users/99999",
+        headers=auth(admin),
+        json={"phone": "555"},
+    )
+    assert r.status_code == 404
+
+
 def test_file_upload_image_resized_to_webp():
     c = client()
     t1, _ = make_user(c, "judy")

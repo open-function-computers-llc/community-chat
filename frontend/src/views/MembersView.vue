@@ -9,6 +9,7 @@ import { toast } from "@/composables/useToasts";
 import { dateOnly, dateAndTime } from "@/composables/useTime";
 import Sidebar from "@/components/Sidebar.vue";
 import Avatar from "@/components/Avatar.vue";
+import Modal from "@/components/Modal.vue";
 
 const auth = useAuthStore();
 const chat = useChatStore();
@@ -25,6 +26,45 @@ const creatingInvite = ref(false);
 
 const members = ref([]);
 const deletingId = ref(null);
+
+const editOpen = ref(false);
+const editTarget = ref(null);
+const editForm = ref({ display_name: "", email: "", phone: "", family_id: null });
+const saving = ref(false);
+
+function openEdit(u) {
+  editTarget.value = u;
+  editForm.value = {
+    display_name: u.display_name || "",
+    email: u.email || "",
+    phone: u.phone || "",
+    family_id: u.family_id ?? null,
+  };
+  editOpen.value = true;
+}
+
+async function saveEdit() {
+  if (!editTarget.value || saving.value) return;
+  saving.value = true;
+  try {
+    // The admin endpoint treats a null field as "clear", so send every value
+    // each save (empty inputs become null).
+    const updated = await api.patch(`/api/auth/admin/users/${editTarget.value.id}`, {
+      display_name: editForm.value.display_name.trim() || null,
+      email: editForm.value.email.trim() || null,
+      phone: editForm.value.phone.trim() || null,
+      family_id: editForm.value.family_id ?? null,
+    });
+    const idx = members.value.findIndex((m) => m.id === updated.id);
+    if (idx >= 0) members.value[idx] = { ...members.value[idx], ...updated };
+    toast(`${updated.display_name} updated`, "success");
+    editOpen.value = false;
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    saving.value = false;
+  }
+}
 
 onMounted(async () => {
   await loadMembers();
@@ -205,6 +245,13 @@ async function copyLink() {
               <td class="actions-col">
                 <div class="row-actions">
                   <button
+                    class="btn btn-ghost btn-sm"
+                    :disabled="deletingId === u.id"
+                    @click="openEdit(u)"
+                  >
+                    Edit
+                  </button>
+                  <button
                     class="btn btn-ghost btn-sm danger-text"
                     :disabled="u.id === me?.id || deletingId === u.id"
                     @click="deleteMember(u)"
@@ -219,6 +266,40 @@ async function copyLink() {
         <div v-if="members.length === 0" class="invites-empty">No members yet.</div>
       </div>
     </section>
+
+    <Modal v-model:open="editOpen" :title="'Edit ' + (editTarget?.display_name || 'member')">
+      <div v-if="editTarget" class="edit-form">
+        <div class="edit-handle">
+          <Avatar :user="editTarget" size="sm" />
+          <span>@{{ editTarget.handle }}</span>
+        </div>
+        <label>
+          Display name
+          <input v-model="editForm.display_name" maxlength="64" placeholder="Falls back to @handle if blank" />
+        </label>
+        <label>
+          Email
+          <input v-model="editForm.email" type="email" placeholder="name@example.com" />
+        </label>
+        <label>
+          Phone
+          <input v-model="editForm.phone" type="tel" maxlength="32" />
+        </label>
+        <label>
+          Family
+          <select v-model="editForm.family_id">
+            <option :value="null">No family</option>
+            <option v-for="f in families.families" :key="f.id" :value="f.id">{{ f.name }}</option>
+          </select>
+        </label>
+        <div class="edit-actions">
+          <button class="btn btn-ghost btn-sm" :disabled="saving" @click="editOpen = false">Cancel</button>
+          <button class="btn btn-sm" :disabled="saving" @click="saveEdit">
+            {{ saving ? "Saving…" : "Save" }}
+          </button>
+        </div>
+      </div>
+    </Modal>
   </div>
 </template>
 
@@ -364,6 +445,32 @@ async function copyLink() {
 }
 .badge-avatar { width: 16px; height: 16px; border-radius: 4px; object-fit: cover; }
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.edit-handle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.edit-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
 
 @media (max-width: 768px) {
   .mobile-toggle { display: inline-block; font-size: 18px; color: var(--text); }

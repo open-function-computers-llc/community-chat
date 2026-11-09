@@ -14,6 +14,7 @@ from .upload_utils import IMAGE_CONTENT_TYPES, delete_file, process_avatar, publ
 from ..db import SessionLocal, get_db, iso_utc
 from ..models import (
     DMSettings,
+    Family,
     File,
     GroupMessage,
     Invite,
@@ -223,6 +224,45 @@ async def admin_list_users(
         base["last_active_at"] = iso_utc(last_active)
         out.append(base)
     return out
+
+
+class AdminUserUpdate(BaseModel):
+    """Admin-editable member fields. Handle and role are intentionally not
+    editable here (handle is identity; the admin panel's Edit form sends all
+    fields on every save, so omitting a value clears it)."""
+
+    display_name: str | None = Field(default=None, max_length=64)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=32)
+    family_id: int | None = None
+
+
+@router.patch("/admin/users/{user_id}")
+async def admin_update_user(
+    user_id: int,
+    req: AdminUserUpdate,
+    user: User = Depends(require_admin),
+    db=Depends(get_db),
+):
+    """Admin edits a member's basic profile: display name, contact info, and
+    family assignment. Empty/None values clear the field (display_name then
+    falls back to the handle in the UI)."""
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if req.family_id is not None and db.get(Family, req.family_id) is None:
+        raise HTTPException(status_code=400, detail="Unknown family")
+
+    def clean(value):
+        return value.strip() if isinstance(value, str) else value
+
+    target.display_name = clean(req.display_name) or None
+    target.email = clean(req.email)
+    target.phone = clean(req.phone) or None
+    target.family_id = req.family_id
+    db.commit()
+    db.refresh(target)
+    return public_user(target)
 
 
 @router.delete("/users/{user_id}")
