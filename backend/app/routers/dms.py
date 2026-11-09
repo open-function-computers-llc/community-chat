@@ -165,13 +165,11 @@ async def open_room(
         room = DmRoom(created_by=user.id)
         db.add(room)
         db.commit()
-        db.refresh(room)
         from ..db import DmRoomFamily
 
         db.add(DmRoomFamily(room_id=room.id, family_id=user.family_id))
         db.add(DmRoomFamily(room_id=room.id, family_id=other_family.id))
         db.commit()
-        db.refresh(room)
 
     return {
         "id": room.id,
@@ -231,7 +229,6 @@ async def send_room_message(
     )
     db.add(msg)
     db.commit()
-    db.refresh(msg)
     payload = _message_payload(db, msg)
 
     member_ids = _room_member_ids(db, room)
@@ -292,7 +289,6 @@ async def edit_room_message(
     msg.text = new_text
     msg.edited_at = datetime.now(timezone.utc)
     db.commit()
-    db.refresh(msg)
     payload = _message_payload(db, msg)
     asyncio.get_event_loop().create_task(
         hub.broadcast({"type": "dm.edited", "channel": "room", "message": payload})

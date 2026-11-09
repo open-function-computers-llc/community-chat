@@ -84,7 +84,6 @@ async def upload_file(
     )
     db.add(record)
     db.commit()
-    db.refresh(record)
     return {
         "id": record.id,
         "filename": record.filename,

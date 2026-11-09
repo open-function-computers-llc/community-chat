@@ -84,8 +84,8 @@ def _opt_in(handle, enabled=True):
 
 
 def _patch_send(monkeypatch, sink):
-    def fake(subject, html, to_addr):
-        sink.append({"to": to_addr, "subject": subject, "html": html})
+    def fake(subject, html, to_addr, text=None):
+        sink.append({"to": to_addr, "subject": subject, "html": html, "text": text})
         return True
 
     monkeypatch.setattr(email_mod, "send_email", fake)
@@ -126,7 +126,7 @@ def test_notify_group_only_opt_in(monkeypatch):
     # Silence the register-time welcome/invite emails so only the direct
     # notify_* call below is observed.
     monkeypatch.setattr(email_mod, "fire_welcome_email", lambda *a, **k: None)
-    monkeypatch.setattr(email_mod, "fire_invite_email", lambda *a, **k: None)
+    monkeypatch.setattr(email_mod, "fire_invite_used_email", lambda *a, **k: None)
 
     c = client()
     _make_user(c, "bob", email="bob@test.example", admin=True)
@@ -152,7 +152,7 @@ def test_notify_room_only_opt_in(monkeypatch):
     sink: list[dict] = []
     _patch_send(monkeypatch, sink)
     monkeypatch.setattr(email_mod, "fire_welcome_email", lambda *a, **k: None)
-    monkeypatch.setattr(email_mod, "fire_invite_email", lambda *a, **k: None)
+    monkeypatch.setattr(email_mod, "fire_invite_used_email", lambda *a, **k: None)
 
     c = client()
     admin = _make_user(c, "root", email="root@test.example", admin=True)
@@ -175,7 +175,7 @@ def test_notify_room_sender_excluded(monkeypatch):
     sink: list[dict] = []
     _patch_send(monkeypatch, sink)
     monkeypatch.setattr(email_mod, "fire_welcome_email", lambda *a, **k: None)
-    monkeypatch.setattr(email_mod, "fire_invite_email", lambda *a, **k: None)
+    monkeypatch.setattr(email_mod, "fire_invite_used_email", lambda *a, **k: None)
 
     c = client()
     admin = _make_user(c, "root", email="root@test.example", admin=True)
@@ -214,7 +214,7 @@ def test_register_fires_welcome_and_invite(monkeypatch):
         email_mod, "fire_welcome_email", lambda to, name: welcome.append(to)
     )
     monkeypatch.setattr(
-        email_mod, "fire_invite_email", lambda to, name, code, link, fam: invites.append(to)
+        email_mod, "fire_invite_used_email", lambda to, creator, joiner, fam: invites.append(to)
     )
 
     c = client()
@@ -267,12 +267,87 @@ def test_templates_render_all_bodies():
         email_mod._group_html("Al", "hi", room_label="The Alfords"),
         email_mod.invite_html("Bo", "X", "http://x", "Fam"),
         email_mod.invite_html("Bo", "X", "http://x", None),
+        email_mod.invite_used_html("Root", "Bo", "Fam"),
+        email_mod.invite_used_html("Root", "Bo", None),
         email_mod.welcome_html("Cy"),
         email_mod.welcome_html(""),
         email_mod.password_reset_html("Di", "pw", "di"),
         email_mod.test_email_html(),
     ):
         assert "%%" not in html
+
+
+SETTINGS_FOOTER = "Manage or stop them in Settings."
+
+
+def _norm(html: str) -> str:
+    # Collapse whitespace so source line-wrapping in the templates doesn't
+    # affect content assertions (HTML renders it collapsed anyway).
+    return " ".join(html.split())
+
+
+def test_footer_matches_each_audience():
+    # Only opted-in members get the "notifications / Settings" footer; every
+    # other audience gets a footer that actually explains why they're listed.
+    group = _norm(email_mod._group_html("Al", "hi"))
+    assert "you turned on email notifications" in group
+    assert SETTINGS_FOOTER in group
+
+    invite = _norm(email_mod.invite_html("there", "CODE1", "http://x/login?code=CODE1", None))
+    assert "invited to join the chat application for your community" in invite
+    assert SETTINGS_FOOTER not in invite
+    assert "you turned on email notifications" not in invite
+
+    used = _norm(email_mod.invite_used_html("Root", "Newbie", "The Alfords"))
+    assert "someone used an invite you" in used
+    assert "Newbie" in used and "Root" in used and "The Alfords" in used
+    assert SETTINGS_FOOTER not in used
+
+    reset = _norm(email_mod.password_reset_html("Di", "pw", "di"))
+    assert "administrator reset your" in reset and "Community" in reset
+    assert SETTINGS_FOOTER not in reset
+
+    welcome = _norm(email_mod.welcome_html("Cy"))
+    assert "just created your" in welcome and "Community Chat account" in welcome
+    assert SETTINGS_FOOTER not in welcome
+
+    test = _norm(email_mod.test_email_html())
+    assert "delivery test" in test
+    assert SETTINGS_FOOTER not in test
+
+
+def test_send_email_uses_matching_plaintext(monkeypatch):
+    # The text/plain part must match the audience too (some clients show it).
+    captured: list[dict] = []
+
+    def fake_smtp(subject, html, to_addr, text=None):
+        captured.append({"to": to_addr, "text": text})
+
+    monkeypatch.setattr(email_mod, "_send_smtp", fake_smtp)
+    monkeypatch.setattr(email_mod, "email_enabled", lambda: True)
+
+    email_mod.send_email("s", "h", "a@b.c")  # default = member notifications
+    assert captured[0]["text"] == email_mod.TEXT_NOTIFICATIONS
+    email_mod.send_email("s", "h", "a@b.c", email_mod.TEXT_INVITE)
+    assert captured[1]["text"] == email_mod.TEXT_INVITE
+
+    # The admin invite endpoint sends with the invite plaintext.
+    sink: list[dict] = []
+    _patch_send(monkeypatch, sink)
+    c = client()
+    admin = _make_user(c, "root2", admin=True)
+    r = c.post(
+        "/api/invites", headers=auth(admin["token"]), json={"max_uses": 1}
+    )
+    inv = r.json()
+    r = c.post(
+        f"/api/invites/{inv['id']}/email",
+        headers=auth(admin["token"]),
+        json={"emails": ["someone@example.com"]},
+    )
+    assert r.status_code == 200
+    assert sink[0]["text"] == email_mod.TEXT_INVITE
+    assert "invited to join the chat application" in _norm(sink[0]["html"])
 
 
 # --- opportunistic STARTTLS (Mailpit-safety regression) --------------------

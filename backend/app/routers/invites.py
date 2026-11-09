@@ -108,7 +108,6 @@ async def create_invite(
     )
     db.add(invite)
     db.commit()
-    db.refresh(invite)
     return serialize(invite, db)
 
 
@@ -142,7 +141,7 @@ async def email_invite(
             detail="This invite has already been used up — create a new one to email it.",
         )
 
-    from .email import invite_html, send_email
+    from .email import invite_html, send_email, TEXT_INVITE
 
     link = f"{app_origin()}/login?code={invite.code}"
     family_name = None
@@ -159,7 +158,7 @@ async def email_invite(
         # send_email is blocking + best-effort (never raises); run it off the
         # event loop so a slow SMTP round-trip doesn't stall the server.
         ok = await asyncio.to_thread(
-            send_email, "You're invited to Community Chat", html, addr
+            send_email, "You're invited to Community Chat", html, addr, TEXT_INVITE
         )
         (sent if ok else failed).append(addr)
     return {"ok": not failed, "sent": len(sent), "failed": failed, "total": len(addrs)}

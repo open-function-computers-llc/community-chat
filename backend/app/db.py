@@ -32,7 +32,15 @@ if _IS_MEMORY:
     # A single shared connection so every session sees the same in-memory DB.
     _engine_kwargs["poolclass"] = StaticPool
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# expire_on_commit=False: our request handlers own the rows they write within
+# a request, so re-SELECTing every committed object back (SQLAlchemy's
+# default) is pure overhead — and on a single-connection SQLite pool it also
+# adds a needless post-commit read window. Attribute values set/flushed
+# before the commit stay populated and are returned straight from the
+# identity map.
+SessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, expire_on_commit=False, bind=engine
+)
 
 
 class Base(DeclarativeBase):

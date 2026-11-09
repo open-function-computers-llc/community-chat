@@ -60,7 +60,7 @@ from app.core.config import (  # noqa: E402
     smtp_host,
 )
 from app.core.security import hash_password  # noqa: E402
-from app.routers.email import send_email, send_password_reset_email, test_email_html  # noqa: E402
+from app.routers.email import send_email, send_password_reset_email, test_email_html, TEXT_TEST  # noqa: E402
 from app.routers.push import test_push  # noqa: E402
 from app.models import (  # noqa: E402
     DMSettings,
@@ -719,6 +719,7 @@ def _cmd_test_email(args) -> int:
         "Community Chat — test email",
         test_email_html(),
         to_addr,
+        TEXT_TEST,
     )
 
     if args.json:

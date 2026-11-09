@@ -1,10 +1,11 @@
 <!-- Shared frame for every Community Chat transactional email. Child content
      (header row, body rows, optional button row) is injected at the EMAIL_BODY
-     tag below, from the templates in this folder. See app/routers/email.py
-     (::_merge) for the placeholder mechanics. NOTE: never write a literal
-     percent-delimited merge tag inside a template comment — string
-     replacement fills comments too and the injected fragment can break the
-     surrounding markup. -->
+     tag below, from the templates in this folder, and the one-line audience
+     explanation is injected at the FOOTER tag (a partials/footer_*.html file
+     chosen per email by audience — see app/routers/email.py ::_frame).
+     See app/routers/email.py (::_merge) for the placeholder mechanics; it
+     strips HTML comments before filling tags, so comments like this one are
+     authoring documentation only and never ship inside the email. -->
 <html>
   <head>
     <meta name="x-apple-disable-message-reformatting" />
@@ -17,11 +18,7 @@
             %%EMAIL_BODY%%
             <tr>
               <td style="padding: 20px; text-align: center; color: #9aa0a6; font-size: 12px;">
-                <p style="margin: 0;">
-                  Community Chat &middot; you're getting this because you turned on email
-                  notifications.<br />
-                  Manage or stop them in Settings.
-                </p>
+                <p style="margin: 0;">%%FOOTER%%</p>
               </td>
             </tr>
           </table>

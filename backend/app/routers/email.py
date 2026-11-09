@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import smtplib
 from email.message import EmailMessage
 from pathlib import Path
@@ -49,17 +50,13 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # SMTP send
 # ---------------------------------------------------------------------------
-def _send_smtp(subject: str, html: str, to_addr: str) -> None:
+def _send_smtp(subject: str, html: str, to_addr: str, text: str | None = None) -> None:
     """Send one email over SMTP. Raises on SMTP errors (caller decides)."""
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = f"{smtp_from_name()} <{smtp_from_address()}>"
     msg["To"] = to_addr
-    msg.set_content(
-        "You're receiving this because you enabled email notifications in "
-        "Community Chat. To stop receiving them, open the app and turn the "
-        "toggle off in Settings."
-    )
+    msg.set_content(text or TEXT_NOTIFICATIONS)
     msg.add_alternative(html, subtype="html")
 
     host, port = smtp_host(), smtp_port()
@@ -87,14 +84,16 @@ def _send_smtp(subject: str, html: str, to_addr: str) -> None:
             pass
 
 
-def send_email(subject: str, html: str, to_addr: str) -> bool:
+def send_email(subject: str, html: str, to_addr: str, text: str | None = None) -> bool:
     """Best-effort send: returns True on success, False (with a log) on any
-    error. Never raises."""
+    error. Never raises. `text` is the text/plain part — pass the TEXT_*
+    constant whose audience matches the email (defaults to the notification
+    wording)."""
     if not email_enabled():
         logger.debug("email disabled (no SMTP_HOST/SMTP_FROM_ADDRESS); skipping")
         return False
     try:
-        _send_smtp(subject, html, to_addr)
+        _send_smtp(subject, html, to_addr, text or TEXT_NOTIFICATIONS)
         logger.info("email sent to %s: %s", to_addr, subject)
         return True
     except Exception:  # noqa: BLE001 - an email failure must not break the app
@@ -113,6 +112,33 @@ def send_email(subject: str, html: str, to_addr: str) -> bool:
 # double-escaping.
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates" / "email"
 
+# Plain-text (text/plain) counterpart for each email, matching its footer.
+# The right one is passed to send_email() by the email's builder/caller.
+TEXT_NOTIFICATIONS = (
+    "You're receiving this because you enabled email notifications in "
+    "Community Chat. To stop receiving them, open the app and turn the "
+    "toggle off in Settings."
+)
+TEXT_INVITE = (
+    "You're receiving this because you were invited to join the chat "
+    "application for your community. Open the link in this email to join."
+)
+TEXT_INVITE_USED = (
+    "You're receiving this because someone used an invite you created on "
+    "Community Chat."
+)
+TEXT_PASSWORD_RESET = (
+    "You're receiving this because an administrator reset your Community "
+    "Chat password."
+)
+TEXT_WELCOME = (
+    "You're receiving this because you created your Community Chat account."
+)
+TEXT_TEST = (
+    "You're receiving this because someone ran the email delivery test on "
+    "the Community Chat server."
+)
+
 
 class _Raw(str):
     """A pre-rendered HTML fragment — injected into templates unescaped."""
@@ -126,13 +152,24 @@ def _esc(s: str) -> str:
 
 def _merge(template: str, **tags: str) -> _Raw:
     """Render a template file from templates/email/ by replacing each
-    %%TAG%% with its value. Values are escaped unless already _Raw."""
+    %%TAG%% with its value. Values are escaped unless already _Raw. HTML
+    comments are stripped first, so template comments are pure authoring
+    documentation and never ship inside the email."""
     html = (_TEMPLATES_DIR / template).read_text(encoding="utf-8")
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
     for tag, value in tags.items():
         if not isinstance(value, _Raw):
             value = _esc("" if value is None else str(value))
         html = html.replace(f"%%{tag}%%", value)
     return _Raw(html)
+
+
+def _frame(body: _Raw, footer: str = "partials/footer.html") -> _Raw:
+    """Wrap an email body in the shared base frame. The footer partial is
+    chosen per email to match its audience — not everyone who gets an email
+    turned on notifications (invitees aren't members yet, a password reset
+    isn't a subscription), so the default fits only opted-in members."""
+    return _merge("base.html", EMAIL_BODY=body, FOOTER=_merge(footer))
 
 
 # ---------------------------------------------------------------------------
@@ -158,32 +195,55 @@ def _email_recipients(db, user_ids: Iterable[int]) -> list[tuple[int, str]]:
 # ---------------------------------------------------------------------------
 # Fan-out (sync; called from a worker thread)
 # ---------------------------------------------------------------------------
-def notify_group(db, sender_id: int, sender_name: str, text: str) -> int:
-    """Email every opt-in user (except the sender) about a new group message."""
+# Fan-out is split in two: a TARGETS phase that reads the DB, and a DELIVER
+# phase that only does network I/O. Background callers must finish the first
+# phase and CLOSE their session before the second one starts — holding a
+# session (and its open SQLite transaction) across a slow SMTP round-trip
+# serializes every other request against the single-connection database, and
+# the close()-rollback at task teardown can discard concurrent commits.
+def _targets(db, user_ids: Iterable[int], subject: str, html: str) -> list[tuple[str, str, str]]:
+    return [(subject, html, addr) for _uid, addr in _email_recipients(db, user_ids)]
+
+
+def _deliver(batch: list[tuple[str, str, str]]) -> int:
+    sent = 0
+    for subject, html, addr in batch:
+        if send_email(subject, html, addr):
+            sent += 1
+    return sent
+
+
+def _group_targets(db, sender_id: int, sender_name: str, text: str) -> list[tuple[str, str, str]]:
+    """Resolve (subject, html, address) triples for a new group message."""
     if not email_enabled():
-        return 0
+        return []
     user_ids = {
         r[0] for r in db.query(User.id).filter(User.is_active == True).all()  # noqa: E712
     }
     user_ids.discard(sender_id)
-    return _deliver_many(db, user_ids, _group_subject(text), _group_html(sender_name, text))
+    return _targets(db, user_ids, _group_subject(text), _group_html(sender_name, text))
+
+
+def _room_targets(
+    db, member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str
+) -> list[tuple[str, str, str]]:
+    """Resolve (subject, html, address) triples for a new family-room message."""
+    if not email_enabled():
+        return []
+    ids = set(member_ids) - {sender_id}
+    return _targets(
+        db, ids, _group_subject(text), _group_html(sender_name, text, room_label)
+    )
+
+
+def notify_group(db, sender_id: int, sender_name: str, text: str) -> int:
+    """Email every opt-in user (except the sender) about a new group message."""
+    return _deliver(_group_targets(db, sender_id, sender_name, text))
 
 
 def notify_room(db, member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str) -> int:
     """Email every opt-in room member (except the sender) about a new message."""
-    if not email_enabled():
-        return 0
-    ids = set(member_ids) - {sender_id}
-    return _deliver_many(db, ids, _group_subject(text), _group_html(sender_name, text, room_label))
-
-
-def _deliver_many(db, user_ids, subject: str, html: str) -> int:
-    recipients = _email_recipients(db, user_ids)
-    sent = 0
-    for _uid, addr in recipients:
-        if send_email(subject, html, addr):
-            sent += 1
-    return sent
+    return _deliver(_room_targets(db, member_ids, sender_id, sender_name, text, room_label))
 
 
 def _group_subject(text: str) -> str:
@@ -196,15 +256,14 @@ def _group_html(sender_name: str, text: str, room_label: str | None = None) -> s
     room_block = (
         _merge("partials/room_label.html", ROOM_LABEL=room_label) if room_label else _Raw("")
     )
-    return _merge(
-        "base.html",
-        EMAIL_BODY=_merge(
+    return _frame(
+        _merge(
             "group_message.html",
             SENDER_NAME=sender_name,
             SNIPPET=(text or "").strip() or "(attachment)",
             ROOM_LABEL_BLOCK=room_block,
             BUTTON_URL=app_origin() + "/",
-        ),
+        )
     )
 
 
@@ -212,28 +271,44 @@ def invite_html(recipient_name: str, code: str, link: str, family_name: str | No
     family_block = (
         _merge("partials/invite_family.html", FAMILY_NAME=family_name) if family_name else _Raw("")
     )
-    return _merge(
-        "base.html",
-        EMAIL_BODY=_merge(
+    return _frame(
+        _merge(
             "invite.html",
             RECIPIENT_NAME=recipient_name,
             CODE=code,
             FAMILY_BLOCK=family_block,
             LINK=link,
         ),
+        footer="partials/footer_invite.html",
+    )
+
+
+def invite_used_html(creator_name: str, joiner_name: str, family_name: str | None) -> str:
+    family_block = (
+        _merge("partials/invite_family.html", FAMILY_NAME=family_name) if family_name else _Raw("")
+    )
+    return _frame(
+        _merge(
+            "invite_used.html",
+            CREATOR_NAME=creator_name,
+            JOINER_NAME=joiner_name,
+            FAMILY_BLOCK=family_block,
+            APP_URL=app_origin() + "/",
+        ),
+        footer="partials/footer_invite_used.html",
     )
 
 
 def password_reset_html(recipient_name: str, password: str, handle: str) -> str:
-    return _merge(
-        "base.html",
-        EMAIL_BODY=_merge(
+    return _frame(
+        _merge(
             "password_reset.html",
             RECIPIENT_NAME=recipient_name,
             PASSWORD=password,
             HANDLE=handle,
             SIGNIN_URL=app_origin() + "/login",
         ),
+        footer="partials/footer_password_reset.html",
     )
 
 
@@ -243,24 +318,25 @@ def send_password_reset_email(to_addr: str, recipient_name: str, password: str, 
         "Your Community Chat password was reset",
         password_reset_html(recipient_name, password, handle),
         to_addr,
+        TEXT_PASSWORD_RESET,
     )
 
 
 def welcome_html(display_name: str) -> str:
     name = (display_name or "").split()[0] if display_name else ""
     greeting = f"Welcome{f' {name}' if name else ''}! You've joined Community Chat."
-    return _merge(
-        "base.html",
-        EMAIL_BODY=_merge("welcome.html", GREETING=greeting, APP_URL=app_origin() + "/"),
+    return _frame(
+        _merge("welcome.html", GREETING=greeting, APP_URL=app_origin() + "/"),
+        footer="partials/footer_welcome.html",
     )
 
 
 def test_email_html() -> str:
     """A fixed, branded message used by the `manage.py test-email` command to
     verify the SMTP configuration is actually delivering mail."""
-    return _merge(
-        "base.html",
-        EMAIL_BODY=_merge("test_email.html", APP_URL=app_origin() + "/"),
+    return _frame(
+        _merge("test_email.html", APP_URL=app_origin() + "/"),
+        footer="partials/footer_test.html",
     )
 
 
@@ -279,66 +355,91 @@ async def status(user: User = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # Background task wrappers (mirror push.py)
 # ---------------------------------------------------------------------------
-def _group_email_task(sender_id: int, sender_name: str, text: str) -> None:
+# The DB (targets) phase runs on the event-loop thread: sync DB code there
+# executes atomically between awaits, so a fan-out session never interleaves
+# with request sessions on the single shared SQLite connection (two sessions
+# sharing one StaticPool connection share one transaction context — whoever
+# closes/rolls back first discards the other's pending writes). Only the
+# network send goes to a worker thread, and it touches no session at all.
+def _collect_group_batch(sender_id: int, sender_name: str, text: str) -> list[tuple[str, str, str]]:
     db = SessionLocal()
     try:
-        notify_group(db, sender_id, sender_name, text)
-    except Exception:  # noqa: BLE001
-        logger.exception("group email fan-out failed")
+        return _group_targets(db, sender_id, sender_name, text)
     finally:
         db.close()
 
 
-def _room_email_task(member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str) -> None:
+def _collect_room_batch(
+    member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str
+) -> list[tuple[str, str, str]]:
     db = SessionLocal()
     try:
-        notify_room(db, member_ids, sender_id, sender_name, text, room_label)
-    except Exception:  # noqa: BLE001
-        logger.exception("room email fan-out failed")
+        return _room_targets(db, member_ids, sender_id, sender_name, text, room_label)
     finally:
         db.close()
 
 
-def _invite_email_task(to_addr: str, recipient_name: str, code: str, link: str, family_name: str | None) -> None:
+def _invite_used_email_task(
+    to_addr: str, creator_name: str, joiner_name: str, family_name: str | None
+) -> None:
     send_email(
-        "You're invited to Community Chat",
-        invite_html(recipient_name, code, link, family_name),
+        "Your Community Chat invite was used",
+        invite_used_html(creator_name, joiner_name, family_name),
         to_addr,
+        TEXT_INVITE_USED,
     )
 
 
 def _welcome_email_task(to_addr: str, display_name: str) -> None:
-    send_email("Welcome to Community Chat", welcome_html(display_name), to_addr)
+    send_email(
+        "Welcome to Community Chat",
+        welcome_html(display_name),
+        to_addr,
+        TEXT_WELCOME,
+    )
 
 
 async def group_email_task(sender_id: int, sender_name: str, text: str) -> None:
-    await asyncio.to_thread(_group_email_task, sender_id, sender_name, text)
+    try:
+        batch = _collect_group_batch(sender_id, sender_name, text)
+    except Exception:  # noqa: BLE001
+        logger.exception("group email fan-out failed")
+        return
+    await asyncio.to_thread(_deliver, batch)
 
 
 async def room_email_task(
     member_ids: set[int], sender_id: int, sender_name: str, text: str, room_label: str
 ) -> None:
-    await asyncio.to_thread(_room_email_task, member_ids, sender_id, sender_name, text, room_label)
+    try:
+        batch = _collect_room_batch(member_ids, sender_id, sender_name, text, room_label)
+    except Exception:  # noqa: BLE001
+        logger.exception("room email fan-out failed")
+        return
+    await asyncio.to_thread(_deliver, batch)
 
 
-async def invite_email_task(
-    to_addr: str, recipient_name: str, code: str, link: str, family_name: str | None
+async def invite_used_email_task(
+    to_addr: str, creator_name: str, joiner_name: str, family_name: str | None
 ) -> None:
-    await asyncio.to_thread(_invite_email_task, to_addr, recipient_name, code, link, family_name)
+    await asyncio.to_thread(
+        _invite_used_email_task, to_addr, creator_name, joiner_name, family_name
+    )
 
 
 async def welcome_email_task(to_addr: str, display_name: str) -> None:
     await asyncio.to_thread(_welcome_email_task, to_addr, display_name)
 
 
-def fire_invite_email(
-    to_addr: str, recipient_name: str, code: str, link: str, family_name: str | None
+def fire_invite_used_email(
+    to_addr: str, creator_name: str, joiner_name: str, family_name: str | None
 ) -> None:
-    """Fire-and-forget the invite email from within a request handler."""
+    """Fire-and-forget the "your invite was used" notice to the invite's
+    creator when someone registers with their invite."""
     if not email_enabled():
         return
     asyncio.get_event_loop().create_task(
-        invite_email_task(to_addr, recipient_name, code, link, family_name)
+        invite_used_email_task(to_addr, creator_name, joiner_name, family_name)
     )
 
 

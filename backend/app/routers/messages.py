@@ -116,7 +116,6 @@ async def send_message(
     )
     db.add(msg)
     db.commit()
-    db.refresh(msg)
     payload = message_payload(db, msg)
     asyncio.get_event_loop().create_task(
         hub.broadcast({"type": "message.new", "channel": "group", "message": payload})
@@ -161,7 +160,6 @@ async def edit_message(
     msg.text = new_text
     msg.edited_at = datetime.now(timezone.utc)
     db.commit()
-    db.refresh(msg)
     payload = message_payload(db, msg)
     asyncio.get_event_loop().create_task(
         hub.broadcast({"type": "message.edited", "channel": "group", "message": payload})

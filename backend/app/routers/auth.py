@@ -107,10 +107,8 @@ async def register(req: RegisterRequest, db=Depends(get_db)):
 
     # Best-effort: welcome the newcomer (their own address) and tell the
     # person who created the invite. Fire-and-forget; never blocks the response.
-    from .email import fire_invite_email, fire_welcome_email
-    from ..core.config import app_origin
+    from .email import fire_invite_used_email, fire_welcome_email
 
-    link = f"{app_origin()}/login?code={invite.code}"
     family_name = None
     if invite.family_id:
         from ..models import Family
@@ -122,11 +120,10 @@ async def register(req: RegisterRequest, db=Depends(get_db)):
     if invite.created_by:
         creator = db.get(User, invite.created_by)
         if creator and creator.email and "@" in creator.email:
-            fire_invite_email(
+            fire_invite_used_email(
                 creator.email,
+                creator.display_name or creator.handle,
                 user.display_name or user.handle,
-                req.handle,
-                link,
                 family_name,
             )
 
@@ -261,7 +258,6 @@ async def admin_update_user(
     target.phone = clean(req.phone) or None
     target.family_id = req.family_id
     db.commit()
-    db.refresh(target)
     return public_user(target)
 
 
@@ -334,7 +330,6 @@ async def update_profile(req: ProfileUpdate, user: User = Depends(get_current_us
         if value is not None:
             setattr(user, field_name, value.strip() if isinstance(value, str) else value)
     db.commit()
-    db.refresh(user)
     return public_user(user)
 
 
@@ -359,7 +354,6 @@ async def upload_my_avatar(
     delete_file(user.avatar_url)
     user.avatar_url = public_url(storage_name)
     db.commit()
-    db.refresh(user)
     return public_user(user)
 
 

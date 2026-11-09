@@ -93,7 +93,6 @@ async def create_family(
     family = Family(name=name, description=req.description, created_by=user.id)
     db.add(family)
     db.commit()
-    db.refresh(family)
     return serialize(db, family)
 
 
@@ -119,7 +118,6 @@ async def update_family(
     if req.description is not None:
         family.description = req.description
     db.commit()
-    db.refresh(family)
     return serialize(db, family)
 
 
@@ -179,5 +177,4 @@ async def upload_family_avatar(
     delete_file(family.avatar_url)
     family.avatar_url = public_url(storage_name)
     db.commit()
-    db.refresh(family)
     return serialize(db, family)
