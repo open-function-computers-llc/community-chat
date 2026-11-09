@@ -35,6 +35,7 @@ services:
       - VAPID_EMAIL=${VAPID_EMAIL:?VAPID_EMAIL is required in production}
       # Public origin of the site (deep links / VAPID audience).
       - APP_ORIGIN=${APP_ORIGIN:?APP_ORIGIN is required in production}
+      - COMMUNITY_NAME=${COMMUNITY_NAME:-Community Chat}
       # Transactional email (SMTP) — real provider, e.g. Resend. Optional:
       # leave these empty to boot the app with email disabled, then add them
       # and recreate the container to turn it on.

@@ -25,6 +25,7 @@ services:
       - VAPID_EMAIL=${VAPID_EMAIL:-mailto:admin@example.com}
       # Public origin of the site, used as the VAPID audience / deep-link base.
       - APP_ORIGIN=${APP_ORIGIN:-http://localhost:8983}
+      - COMMUNITY_NAME=${COMMUNITY_NAME:-Community Chat}
       # Transactional email (SMTP). In dev these point at the local Mailpit
       # sink (see .env.local). In production override with your provider
       # (e.g. Resend): SMTP_HOST=smtp.resend.com SMTP_PORT=587
