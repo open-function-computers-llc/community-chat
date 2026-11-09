@@ -3,6 +3,7 @@ import { ref, onMounted } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { toast } from "@/composables/useToasts";
+import AboutModal from "@/components/AboutModal.vue";
 
 const router = useRouter();
 const route = useRoute();
@@ -17,6 +18,7 @@ const email = ref("");
 const phone = ref("");
 const error = ref("");
 const loading = ref(false);
+const showAbout = ref(false);
 
 onMounted(() => {
   if (route.query.code) {
@@ -100,6 +102,9 @@ async function submit() {
           {{ loading ? "…" : tab === "login" ? "Sign in" : "Create account" }}
         </button>
       </form>
+
+      <button class="about-link" @click="showAbout = true">About this app</button>
+      <AboutModal v-model:open="showAbout" />
     </div>
   </div>
 </template>
@@ -132,6 +137,16 @@ async function submit() {
 }
 .login-header { text-align: center; margin-bottom: 24px; }
 .login-logo { font-size: 48px; }
+.about-link {
+  display: block;
+  margin: 18px auto 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.about-link:hover { color: var(--text); }
 .login-header h1 { font-size: 24px; margin-top: 8px; }
 .subtitle { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
 .tabs {

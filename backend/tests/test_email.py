@@ -203,6 +203,30 @@ def test_disabled_when_no_smtp_host(monkeypatch):
     assert sink == []  # email_enabled() False -> send_email returns False without recording
 
 
+def test_brand_illustration_is_inlined(monkeypatch):
+    # The unDraw brand art ships as an inline CID part (remote URLs get
+    # blocked by client image privacy), referenced by every framed email.
+    from pathlib import Path as _Path
+
+    assert email_mod.BRAND_IMAGE.exists(), "brand asset must ship with the backend"
+    html = email_mod.welcome_html("Sam")
+    assert f"cid:{email_mod.BRAND_CID}" in html
+
+    msg = email_mod._build_message("subj", html, "a@b.c")
+    images = [p for p in msg.walk() if p.get_content_type() == "image/png"]
+    assert len(images) == 1
+    assert images[0].get("Content-ID") == f"<{email_mod.BRAND_CID}>"
+    assert images[0].get_payload(decode=True) == email_mod.BRAND_IMAGE.read_bytes()
+
+    # Missing asset -> no cid reference in the HTML (no broken-image icon)
+    # and nothing attached.
+    monkeypatch.setattr(email_mod, "BRAND_IMAGE", _Path("/nonexistent/undraw.png"))
+    html = email_mod.welcome_html("Sam")
+    assert "cid:" not in html
+    msg = email_mod._build_message("subj", html, "a@b.c")
+    assert [p for p in msg.walk() if p.get_content_type() == "image/png"] == []
+
+
 def test_register_fires_welcome_and_invite(monkeypatch):
     welcome: list[str] = []
     invites: list[str] = []

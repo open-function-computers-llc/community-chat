@@ -5,6 +5,7 @@ import { storeToRefs } from "pinia";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
 import Avatar from "./Avatar.vue";
+import AboutModal from "./AboutModal.vue";
 
 defineProps({
   mobileOpen: { type: Boolean, default: false },
@@ -18,6 +19,7 @@ const chat = useChatStore();
 const { rooms } = storeToRefs(chat);
 const { me } = storeToRefs(auth);
 const isAdmin = computed(() => !!me.value?.is_admin);
+const showAbout = ref(false);
 
 function roomLabel(room) {
   // Show the other family(ies) in the room (excluding the user's own family).
@@ -92,7 +94,14 @@ watch(
         <router-link to="/families">Chat with a family →</router-link>
       </div>
     </div>
+
+    <div class="sidebar-foot">
+      <button class="nav-item about-item" @click="showAbout = true">
+        <span class="nav-icon">ℹ️</span> About this app
+      </button>
+    </div>
   </aside>
+  <AboutModal v-model:open="showAbout" />
   <button v-if="mobileOpen" class="mobile-overlay" @click="emit('close')"></button>
 </template>
 
@@ -178,6 +187,12 @@ watch(
   font-size: 13px;
   color: var(--text-muted);
 }
+.sidebar-foot {
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  flex-shrink: 0;
+}
+.about-item { color: var(--text-muted); font-size: 13px; }
 .mobile-close { display: none; }
 
 @media (max-width: 768px) {

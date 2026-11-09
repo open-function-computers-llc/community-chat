@@ -51,15 +51,36 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # SMTP send
 # ---------------------------------------------------------------------------
-def _send_smtp(subject: str, html: str, to_addr: str, text: str | None = None) -> None:
-    """Send one email over SMTP. Raises on SMTP errors (caller decides)."""
+def _build_message(subject: str, html: str, to_addr: str, text: str | None = None) -> EmailMessage:
+    """Assemble the multipart/alternative message (text + html).
+
+    The brand illustration is inlined when the HTML references it (the frame
+    only emits the cid: reference if the file exists). Turning the html
+    alternative into multipart/related keeps it self-contained: remote
+    image URLs would just be blocked by clients' image privacy."""
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = f"{smtp_from_name()} <{smtp_from_address()}>"
     msg["To"] = to_addr
     msg.set_content(text or TEXT_NOTIFICATIONS)
     msg.add_alternative(html, subtype="html")
+    if BRAND_IMAGE.exists() and f"cid:{BRAND_CID}" in html:
+        try:
+            subtype = _IMAGE_SUBTYPES.get(BRAND_IMAGE.suffix.lower(), "png")
+            msg.get_payload()[-1].add_related(
+                BRAND_IMAGE.read_bytes(),
+                maintype="image",
+                subtype=subtype,
+                cid=f"<{BRAND_CID}>",
+            )
+        except OSError:
+            logger.warning("brand image unreadable at %s; sending without it", BRAND_IMAGE)
+    return msg
 
+
+def _send_smtp(subject: str, html: str, to_addr: str, text: str | None = None) -> None:
+    """Send one email over SMTP. Raises on SMTP errors (caller decides)."""
+    msg = _build_message(subject, html, to_addr, text)
     host, port = smtp_host(), smtp_port()
     if port == 465:
         server = smtplib.SMTP_SSL(host, port, timeout=smtp_timeout())
@@ -112,6 +133,16 @@ def send_email(subject: str, html: str, to_addr: str, text: str | None = None) -
 # fragments produced by _merge() are marked _Raw so they compose without
 # double-escaping.
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates" / "email"
+
+# Brand imagery shipped with the backend (backend/assets, /app/assets in the
+# container). Referenced from the HTML by cid:<BRAND_CID> and attached inline
+# by _send_smtp — remote URLs would be blocked by most clients' image
+# privacy, an inline part always renders. Attribution for the unDraw art
+# lives in the app's "About this app" modal (frontend).
+_ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
+BRAND_IMAGE = _ASSETS_DIR / "undraw_family_6gj8.png"
+BRAND_CID = "undraw-family"
+_IMAGE_SUBTYPES = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif"}
 
 # Plain-text (text/plain) counterpart for each email, matching its footer.
 # The right one is passed to send_email() by the email's builder/caller.
@@ -169,12 +200,26 @@ def _merge(template: str, **tags: str) -> _Raw:
     return _Raw(html)
 
 
+def _brand_masthead() -> _Raw:
+    """The masthead <img> for the shared frame. Empty (the row collapses) if
+    the asset file is missing, so a stripped deployment never shows a broken
+    image."""
+    if not BRAND_IMAGE.exists():
+        return _Raw("")
+    return _Raw(
+        f'<img src="cid:{BRAND_CID}" width="176" alt="Community Chat" '
+        'style="display: block; margin: 0 auto; padding: 22px 0 0;" />'
+    )
+
+
 def _frame(body: _Raw, footer: str = "partials/footer.html") -> _Raw:
     """Wrap an email body in the shared base frame. The footer partial is
     chosen per email to match its audience — not everyone who gets an email
     turned on notifications (invitees aren't members yet, a password reset
     isn't a subscription), so the default fits only opted-in members."""
-    return _merge("base.html", EMAIL_BODY=body, FOOTER=_merge(footer))
+    return _merge(
+        "base.html", EMAIL_BODY=body, FOOTER=_merge(footer), BRAND_IMG=_brand_masthead()
+    )
 
 
 # ---------------------------------------------------------------------------
