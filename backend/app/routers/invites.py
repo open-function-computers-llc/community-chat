@@ -1,12 +1,14 @@
+import asyncio
 import secrets
 import string
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 
 from ..db import SessionLocal, get_db, iso_utc
 from ..models import Family, Invite, User
+from ..core.config import app_origin, email_enabled
 from ..core.security import get_current_user, require_admin
 
 router = APIRouter()
@@ -19,6 +21,10 @@ class InviteCreateRequest(BaseModel):
     max_uses: int = Field(default=1, ge=1, le=100)
     note: str | None = Field(default=None, max_length=200)
     family_id: int | None = Field(default=None)
+
+
+class InviteEmailRequest(BaseModel):
+    emails: list[EmailStr] = Field(min_length=1, max_length=20)
 
 
 class InviteOut(BaseModel):
@@ -104,6 +110,59 @@ async def create_invite(
     db.commit()
     db.refresh(invite)
     return serialize(invite, db)
+
+
+@router.post("/{invite_id}/email")
+async def email_invite(
+    invite_id: int,
+    req: InviteEmailRequest,
+    user: User = Depends(require_admin),
+    db=Depends(get_db),
+):
+    """Admin emails the invite's join link to one or more addresses using the
+    standard invite email template (same one sent when an invite is created
+    with a recipient). Duplicate addresses are collapsed; each send is
+    best-effort, and per-address failures are reported back so the admin can
+    retry or hand-deliver those."""
+    if not email_enabled():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Email is not configured — set SMTP_HOST and SMTP_FROM_ADDRESS "
+                "in the server's env file (verify with: manage.py test-email)."
+            ),
+        )
+
+    invite = db.get(Invite, invite_id)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if invite.used_at is not None or invite.times_used >= invite.max_uses:
+        raise HTTPException(
+            status_code=400,
+            detail="This invite has already been used up — create a new one to email it.",
+        )
+
+    from .email import invite_html, send_email
+
+    link = f"{app_origin()}/login?code={invite.code}"
+    family_name = None
+    if invite.family_id:
+        fam = db.get(Family, invite.family_id)
+        family_name = fam.name if fam else None
+    html = invite_html("there", invite.code, link, family_name)
+
+    # De-dupe while preserving order.
+    addrs = list(dict.fromkeys(req.emails))
+    sent: list[str] = []
+    failed: list[str] = []
+    for addr in addrs:
+        # send_email is blocking + best-effort (never raises); run it off the
+        # event loop so a slow SMTP round-trip doesn't stall the server.
+        ok = await asyncio.to_thread(
+            send_email, "You're invited to Community Chat", html, addr
+        )
+        (sent if ok else failed).append(addr)
+    return {"ok": not failed, "sent": len(sent), "failed": failed, "total": len(addrs)}
 
 
 @router.delete("/{invite_id}")

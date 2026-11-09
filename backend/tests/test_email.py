@@ -334,3 +334,93 @@ def test_send_smtp_plaintext_when_starttls_not_supported(monkeypatch):
     srv = _StubSMTP.instances[-1]
     assert "starttls" not in srv.calls
     assert ("send", "someone@example.com") in srv.calls
+
+
+# --- admin "email this invite" ---------------------------------------------
+def _make_admin_invite(c, monkeypatch, family_name=None, max_uses=2):
+    """Common setup: an admin, an optional family, and one invite."""
+    sink: list[dict] = []
+    _patch_send(monkeypatch, sink)
+    c = client()
+    admin = _make_user(c, "root", admin=True)
+    fam_id = None
+    if family_name:
+        r = c.post("/api/families", headers=auth(admin["token"]), json={"name": family_name})
+        assert r.status_code == 201
+        fam_id = r.json()["id"]
+    r = c.post(
+        "/api/invites",
+        headers=auth(admin["token"]),
+        json={"max_uses": max_uses, "family_id": fam_id},
+    )
+    assert r.status_code == 201
+    return c, admin, r.json(), sink
+
+
+def test_email_invite_sends_to_unique_addresses(monkeypatch):
+    c, admin, inv, sink = _make_admin_invite(c=None, monkeypatch=monkeypatch, family_name="The Alfords")
+
+    r = c.post(
+        f"/api/invites/{inv['id']}/email",
+        headers=auth(admin["token"]),
+        json={"emails": ["grandma@example.com", "grandpa@example.com", "grandma@example.com"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "sent": 2, "failed": [], "total": 2}
+    assert [s["to"] for s in sink] == ["grandma@example.com", "grandpa@example.com"]
+    assert sink[0]["subject"] == "You're invited to Community Chat"
+    # Uses the shared invite template: code, join link, and family name.
+    assert inv["code"] in sink[0]["html"]
+    assert f"/login?code={inv['code']}" in sink[0]["html"]
+    assert "The Alfords" in sink[0]["html"]
+
+
+def test_email_invite_rejects_bad_address(monkeypatch):
+    c, admin, inv, sink = _make_admin_invite(c=None, monkeypatch=monkeypatch)
+    r = c.post(
+        f"/api/invites/{inv['id']}/email",
+        headers=auth(admin["token"]),
+        json={"emails": ["not-an-email"]},
+    )
+    assert r.status_code == 422
+    assert sink == []
+
+
+def test_email_invite_used_up_invite_rejected(monkeypatch):
+    c, admin, inv, sink = _make_admin_invite(c=None, monkeypatch=monkeypatch, max_uses=1)
+    assert c.delete(f"/api/invites/{inv['id']}", headers=auth(admin["token"])).status_code == 200
+    r = c.post(
+        f"/api/invites/{inv['id']}/email",
+        headers=auth(admin["token"]),
+        json={"emails": ["someone@example.com"]},
+    )
+    assert r.status_code == 400
+    assert "used up" in r.json()["detail"]
+    assert sink == []
+
+
+def test_email_invite_requires_admin(monkeypatch):
+    c, admin, inv, sink = _make_admin_invite(c=None, monkeypatch=monkeypatch)
+    regular = _make_user(c, "carla")
+    r = c.post(
+        f"/api/invites/{inv['id']}/email",
+        headers=auth(regular["token"]),
+        json={"emails": ["someone@example.com"]},
+    )
+    assert r.status_code == 403
+    assert sink == []
+
+
+def test_email_invite_requires_smtp_config(monkeypatch):
+    from app.routers import invites as invites_mod
+
+    monkeypatch.setattr(invites_mod, "email_enabled", lambda: False)
+    c, admin, inv, sink = _make_admin_invite(c=None, monkeypatch=monkeypatch)
+    r = c.post(
+        f"/api/invites/{inv['id']}/email",
+        headers=auth(admin["token"]),
+        json={"emails": ["someone@example.com"]},
+    )
+    assert r.status_code == 400
+    assert "not configured" in r.json()["detail"]
+    assert sink == []

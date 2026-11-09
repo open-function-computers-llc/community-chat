@@ -23,6 +23,10 @@ const inviteMaxUses = ref(1);
 const inviteNote = ref("");
 const inviteFamilyId = ref(null);
 const creatingInvite = ref(false);
+const inviteId = ref(null);
+const showEmailForm = ref(false);
+const emailInput = ref("");
+const emailing = ref(false);
 
 const members = ref([]);
 const deletingId = ref(null);
@@ -119,12 +123,46 @@ async function createInvite() {
       family_id: inviteFamilyId.value || null,
     });
     inviteCode.value = invite.code;
+    inviteId.value = invite.id;
     inviteNote.value = "";
+    showEmailForm.value = false;
+    emailInput.value = "";
     toast("Invite created", "success");
   } catch (e) {
     toast(e.message, "error");
   } finally {
     creatingInvite.value = false;
+  }
+}
+
+function parseEmails(raw) {
+  return [...new Set(
+    raw
+      .split(/[\s,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  )];
+}
+
+async function emailInvite() {
+  if (!inviteId.value || emailing.value) return;
+  const emails = parseEmails(emailInput.value);
+  if (emails.length === 0) {
+    toast("Add at least one email address", "error");
+    return;
+  }
+  emailing.value = true;
+  try {
+    const res = await api.post(`/api/invites/${inviteId.value}/email`, { emails });
+    if (res.failed && res.failed.length) {
+      toast(`Sent to ${res.sent}, failed: ${res.failed.join(", ")}`, "error");
+    } else {
+      toast(`Invite emailed to ${res.sent} address${res.sent === 1 ? "" : "es"}`, "success");
+    }
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    emailing.value = false;
   }
 }
 
@@ -202,6 +240,22 @@ async function copyLink() {
             <span class="invite-link-label">Link:</span>
             <code class="invite-link">{{ inviteLink() }}</code>
             <button class="btn btn-ghost btn-sm" @click="copyLink">Copy link</button>
+          </div>
+          <div class="invite-email-toggle">
+            <button class="btn btn-ghost btn-sm" @click="showEmailForm = !showEmailForm">
+              ✉️ Email this invite
+            </button>
+          </div>
+          <div v-if="showEmailForm" class="invite-email-form">
+            <input
+              v-model="emailInput"
+              placeholder="name@example.com, grandma@example.com"
+              :disabled="emailing"
+              @keyup.enter="emailInvite"
+            />
+            <button class="btn btn-sm" :disabled="emailing" @click="emailInvite">
+              {{ emailing ? "Sending…" : "Send" }}
+            </button>
           </div>
         </div>
       </div>
@@ -388,6 +442,23 @@ async function copyLink() {
   padding: 6px 10px;
   border-radius: 6px;
 }
+.invite-email-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.invite-email-form input {
+  flex: 1;
+  min-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+.invite-email-form input:focus { outline: none; border-color: var(--accent); }
 .member-table-wrap {
   padding: 0;
   overflow-x: auto;
