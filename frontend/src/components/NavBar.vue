@@ -1,8 +1,10 @@
 <script setup>
 import { storeToRefs } from "pinia";
+import { useCommunity } from "@/composables/useCommunity";
 import { useAuthStore } from "@/stores/auth";
 
 const emit = defineEmits(["logout"]);
+const { name: communityName } = useCommunity();
 const auth = useAuthStore();
 const { wsStatus } = storeToRefs(auth);
 </script>
@@ -11,7 +13,7 @@ const { wsStatus } = storeToRefs(auth);
   <nav class="navbar">
     <div class="brand">
       <span class="brand-icon">💬</span>
-      <span class="brand-name">Community Chat</span>
+      <span class="brand-name">{{ communityName }}</span>
     </div>
     <div class="nav-right">
       <div class="status" :class="wsStatus">

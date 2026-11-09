@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import or_, select
 
 from .core.config import (
+    community_brand,
     summary_enabled,
     summary_nightly_time,
     summary_weekly_time,
@@ -57,10 +58,10 @@ _SCOPE_INTRO = {
     "nightly": "Here's what happened in your channels in the last 24 hours:",
     "weekly": "Here's what happened in your channels in the last week:",
 }
-_SCOPE_SUBJECT = {
-    "nightly": "Your Community Chat daily summary",
-    "weekly": "Your Community Chat weekly summary",
-}
+def _scope_subject(scope: str) -> str:
+    # A function (not a module dict) so the brand is read live from the env.
+    cadence = "daily" if scope == "nightly" else "weekly"
+    return f"Your {community_brand()} {cadence} summary"
 
 
 def _window_start(scope: str, now: datetime) -> datetime:
@@ -177,7 +178,7 @@ def collect_summaries(
         if e["email"]:
             email_batch.append(
                 (
-                    _SCOPE_SUBJECT[scope],
+                    _scope_subject(scope),
                     summary_html(
                         e["user"].display_name or e["user"].handle,
                         title,

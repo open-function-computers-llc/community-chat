@@ -6,6 +6,7 @@ import { useChatStore } from "@/stores/chat";
 import NavBar from "@/components/NavBar.vue";
 import Toasts from "@/components/Toasts.vue";
 import { resyncPush } from "@/composables/usePush";
+import { useCommunity, loadCommunity, POWERED_BY } from "@/composables/useCommunity";
 
 const auth = useAuthStore();
 const chat = useChatStore();
@@ -16,6 +17,7 @@ const router = useRouter();
 const gitHash = import.meta.env.APP_GIT_HASH || "dev";
 // Dynamic copyright year + the project repo (footer links here).
 const year = new Date().getFullYear();
+const { name: communityName } = useCommunity();
 const repoUrl = "https://github.com/open-function-computers-llc/community-chat";
 
 const installPrompt = ref(null);
@@ -79,6 +81,7 @@ function onVisibilityChange() {
 }
 
 onMounted(async () => {
+  loadCommunity();
   window.addEventListener("beforeinstallprompt", beforeInstallPrompt);
   window.addEventListener("online", onNetworkOnline);
   document.addEventListener("visibilitychange", onVisibilityChange);
@@ -119,7 +122,7 @@ onBeforeUnmount(() => {
     </main>
     <footer class="app-footer">
       <a class="app-footer-link" :href="repoUrl" target="_blank" rel="noopener noreferrer">
-        &copy; {{ year }} &middot; Community Chat
+        &copy; {{ year }} &middot; {{ communityName }} | Powered by {{ POWERED_BY }}
       </a>
       <span class="app-version" :title="'Build ' + gitHash">v: {{ gitHash }}</span>
     </footer>

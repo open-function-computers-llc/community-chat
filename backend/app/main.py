@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from .db import create_all, get_db, File
 from .seed import seed_admin
+from .core.config import community_name
 from .routers import auth, dms, email, families, files, invites, messages, notifications, push
 from .summary import summary_scheduler
 from .routers.upload_utils import (
@@ -61,6 +62,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/api/config")
+async def public_config():
+    """Public app metadata the SPA needs at runtime (no auth) — so branding
+    changes with the COMMUNITY_NAME env var instead of a frontend rebuild."""
+    return {"community_name": community_name()}
+
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(invites.router, prefix="/api/invites", tags=["invites"])
@@ -156,8 +164,17 @@ _SHELL_CACHE_HEADERS = {"Cache-Control": "no-cache, no-store, must-revalidate"}
 _NO_CACHE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}
 
 
-def _shell_response() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "index.html", headers=_SHELL_CACHE_HEADERS)
+_BRAND_PLACEHOLDER = "__COMMUNITY_NAME__"
+
+
+def _branded_response(path: Path, media_type: str) -> Response:
+    """Serve a no-cache text file with the brand placeholder substituted."""
+    text = path.read_text(encoding="utf-8").replace(_BRAND_PLACEHOLDER, community_name())
+    return Response(content=text, media_type=media_type, headers=_SHELL_CACHE_HEADERS)
+
+
+def _shell_response() -> Response:
+    return _branded_response(FRONTEND_DIR / "index.html", "text/html; charset=utf-8")
 
 
 if FRONTEND_DIR.exists():
@@ -175,6 +192,9 @@ if FRONTEND_DIR.exists():
                 # icons) — cacheable, but not forever. The shell, service
                 # worker, and manifest are excluded: a stale SW pins devices
                 # to an old push handler (especially on iOS).
+                if candidate.name == "manifest.webmanifest":
+                    # The PWA manifest carries the installed-app name.
+                    return _branded_response(candidate, "application/manifest+json")
                 headers = (
                     _SHELL_CACHE_HEADERS
                     if candidate.name in _NO_CACHE_FILES

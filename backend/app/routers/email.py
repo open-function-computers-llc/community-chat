@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
 from ..core.config import (
+    community_brand,
     app_origin,
     email_enabled,
     smtp_from_address,
@@ -148,7 +149,7 @@ _IMAGE_SUBTYPES = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif"
 # The right one is passed to send_email() by the email's builder/caller.
 TEXT_NOTIFICATIONS = (
     "You're receiving this because you enabled email notifications in "
-    "Community Chat. To stop receiving them, open the app and turn the "
+    f"{community_brand()}. To stop receiving them, open the app and turn the "
     "toggle off in Settings."
 )
 TEXT_INVITE = (
@@ -157,22 +158,22 @@ TEXT_INVITE = (
 )
 TEXT_INVITE_USED = (
     "You're receiving this because someone used an invite you created on "
-    "Community Chat."
+    f"{community_brand()}."
 )
 TEXT_PASSWORD_RESET = (
     "You're receiving this because an administrator reset your Community "
     "Chat password."
 )
 TEXT_WELCOME = (
-    "You're receiving this because you created your Community Chat account."
+    f"You're receiving this because you created your {community_brand()} account."
 )
 TEXT_TEST = (
     "You're receiving this because someone ran the email delivery test on "
-    "the Community Chat server."
+    f"the {community_brand()} server."
 )
 TEXT_SUMMARY = (
     "You're receiving this because you turned on Channel Summaries in "
-    "Community Chat. Change the cadence in Settings."
+    f"{community_brand()}. Change the cadence in Settings."
 )
 
 
@@ -193,6 +194,10 @@ def _merge(template: str, **tags: str) -> _Raw:
     documentation and never ship inside the email."""
     html = (_TEMPLATES_DIR / template).read_text(encoding="utf-8")
     html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    # Every template may reference %%BRAND%% — the reader-facing name of
+    # this deployment ("Whimsy and Wonder Chat"). Injected here so partials
+    # and builders need no plumbing.
+    html = html.replace("%%BRAND%%", _esc(community_brand()))
     for tag, value in tags.items():
         if not isinstance(value, _Raw):
             value = _esc("" if value is None else str(value))
@@ -207,7 +212,7 @@ def _brand_masthead() -> _Raw:
     if not BRAND_IMAGE.exists():
         return _Raw("")
     return _Raw(
-        f'<img src="cid:{BRAND_CID}" width="176" alt="Community Chat" '
+        f'<img src="cid:{BRAND_CID}" width="176" alt="{community_brand()}" '
         'style="display: block; margin: 0 auto; padding: 22px 0 0;" />'
     )
 
@@ -382,7 +387,7 @@ def password_reset_html(recipient_name: str, password: str, handle: str) -> str:
 def send_password_reset_email(to_addr: str, recipient_name: str, password: str, handle: str) -> bool:
     """Send a password-reset email with the new (temporary) password."""
     return send_email(
-        "Your Community Chat password was reset",
+        f"Your {community_brand()} password was reset",
         password_reset_html(recipient_name, password, handle),
         to_addr,
         TEXT_PASSWORD_RESET,
@@ -391,7 +396,7 @@ def send_password_reset_email(to_addr: str, recipient_name: str, password: str, 
 
 def welcome_html(display_name: str) -> str:
     name = (display_name or "").split()[0] if display_name else ""
-    greeting = f"Welcome{f' {name}' if name else ''}! You've joined Community Chat."
+    greeting = f"Welcome{f' {name}' if name else ''}! You've joined {community_brand()}."
     return _frame(
         _merge("welcome.html", GREETING=greeting, APP_URL=app_origin() + "/"),
         footer="partials/footer_welcome.html",
@@ -469,7 +474,7 @@ def _invite_used_email_task(
     to_addr: str, creator_name: str, joiner_name: str, family_name: str | None
 ) -> None:
     send_email(
-        "Your Community Chat invite was used",
+        f"Your {community_brand()} invite was used",
         invite_used_html(creator_name, joiner_name, family_name),
         to_addr,
         TEXT_INVITE_USED,
@@ -478,7 +483,7 @@ def _invite_used_email_task(
 
 def _welcome_email_task(to_addr: str, display_name: str) -> None:
     send_email(
-        "Welcome to Community Chat",
+        f"Welcome to {community_brand()}",
         welcome_html(display_name),
         to_addr,
         TEXT_WELCOME,

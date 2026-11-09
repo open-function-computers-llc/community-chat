@@ -4,6 +4,7 @@ import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { toast } from "@/composables/useToasts";
 import AboutModal from "@/components/AboutModal.vue";
+import { useCommunity } from "@/composables/useCommunity";
 
 const router = useRouter();
 const route = useRoute();
@@ -19,6 +20,7 @@ const phone = ref("");
 const error = ref("");
 const loading = ref(false);
 const showAbout = ref(false);
+const { name: communityName } = useCommunity();
 
 onMounted(() => {
   if (route.query.code) {
@@ -61,7 +63,7 @@ async function submit() {
     <div class="login-card card">
       <div class="login-header">
         <div class="login-logo">💬</div>
-        <h1>Community Chat</h1>
+        <h1>{{ communityName }}</h1>
         <p class="subtitle">Sign in to catch up with everyone</p>
       </div>
 

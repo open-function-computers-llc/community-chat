@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from ..db import SessionLocal, get_db, iso_utc
 from ..models import Family, Invite, User
-from ..core.config import app_origin, email_enabled
+from ..core.config import community_brand, app_origin, email_enabled
 from ..core.security import get_current_user, require_admin
 
 router = APIRouter()
@@ -158,7 +158,7 @@ async def email_invite(
         # send_email is blocking + best-effort (never raises); run it off the
         # event loop so a slow SMTP round-trip doesn't stall the server.
         ok = await asyncio.to_thread(
-            send_email, "You're invited to Community Chat", html, addr, TEXT_INVITE
+            send_email, f"You're invited to {community_brand()}", html, addr, TEXT_INVITE
         )
         (sent if ok else failed).append(addr)
     return {"ok": not failed, "sent": len(sent), "failed": failed, "total": len(addrs)}

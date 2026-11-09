@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, onUnmounted, ref, computed } from "vue";
+import { useCommunity } from "@/composables/useCommunity";
 import { storeToRefs } from "pinia";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
@@ -9,6 +10,7 @@ import ComposeBox from "@/components/ComposeBox.vue";
 import { onWsEvent } from "@/stores/auth";
 
 const auth = useAuthStore();
+const { name: communityName } = useCommunity();
 const chat = useChatStore();
 const { groupMessages } = storeToRefs(chat);
 const { me, typingNames, wsStatus } = storeToRefs(auth);
@@ -144,7 +146,7 @@ onUnmounted(() => {
       <div ref="scrollRef" class="messages" @scroll="onScroll">
         <div v-if="groupMessages.length === 0" class="empty-state">
           <div class="empty-icon">💬</div>
-          <h2>Welcome to Community Chat!</h2>
+          <h2>Welcome to {{ communityName }}!</h2>
           <p>Say hi to everyone — this is where our little corner of the internet lives.</p>
         </div>
         <MessageBubble

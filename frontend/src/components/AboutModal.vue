@@ -1,5 +1,8 @@
 <script setup>
 import Modal from "./Modal.vue";
+import { useCommunity, POWERED_BY } from "@/composables/useCommunity";
+
+const { name: communityName } = useCommunity();
 
 // The app's "About" dialog. Also the home of the unDraw attribution for the
 // brand illustration used in our emails (backend/assets, attached inline by
@@ -20,13 +23,14 @@ defineEmits(["update:open"]);
   >
     <div class="about">
       <div class="about-logo">💬</div>
-      <h3>Community Chat</h3>
+      <h3>{{ communityName }}</h3>
       <p class="about-blurb">
         A small, private place for families and friends to catch up — group
         chat, family rooms, a shared gallery, and notifications the way you
         want them: instant or digest, by email or push. Self-hosted, so your
         conversations stay on your own server.
       </p>
+      <p class="about-powered">Powered by {{ POWERED_BY }}.</p>
       <p class="about-credit">
         The illustration in our emails is “Family” from
         <a href="https://undraw.co/" target="_blank" rel="noopener noreferrer">unDraw</a>,
@@ -51,4 +55,5 @@ defineEmits(["update:open"]);
 .about-blurb { color: var(--text); font-size: 13px; line-height: 1.55; margin: 0; }
 .about-credit { color: var(--text-muted); font-size: 12px; line-height: 1.55; margin: 0; }
 .about-credit a { color: var(--accent-hover); }
+.about-powered { color: var(--text-muted); font-size: 12px; margin: 0; }
 </style>

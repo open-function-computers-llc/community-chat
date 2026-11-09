@@ -93,6 +93,21 @@ def _hhmm(name: str, default: str) -> tuple[int, int]:
     return int(hh), int(mm)
 
 
+def community_name() -> str:
+    """The community this deployment runs for (e.g. "Whimsy and Wonder").
+    Displayed in the app shell, brand chrome, and emails; unbranded
+    deployments fall back to the product name."""
+    return os.environ.get("COMMUNITY_NAME", "Community Chat").strip() or "Community Chat"
+
+
+def community_brand() -> str:
+    """The brand readers see in email copy — "{name} Chat" for a named
+    community, plain "Community Chat" when COMMUNITY_NAME is unset (never
+    the doubled "Community Chat Chat")."""
+    name = community_name()
+    return name if name == "Community Chat" else f"{name} Chat"
+
+
 def summary_enabled() -> bool:
     """Channel Summary scheduler on/off (SUMMARY_ENABLED=0 disables)."""
     return os.environ.get("SUMMARY_ENABLED", "1").strip() != "0"

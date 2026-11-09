@@ -1,6 +1,6 @@
 {
-  "name": "Community Chat",
-  "short_name": "Community Chat",
+  "name": "__COMMUNITY_NAME__",
+  "short_name": "__COMMUNITY_NAME__",
   "description": "A private chat app for our little community.",
   "start_url": "/",
   "display": "standalone",

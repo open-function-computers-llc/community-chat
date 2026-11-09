@@ -65,6 +65,7 @@ from app.core.config import (  # noqa: E402
 )
 from app.core.security import hash_password  # noqa: E402
 from app.routers.email import send_email, send_password_reset_email, test_email_html, TEXT_TEST  # noqa: E402
+from app.core.config import community_brand  # noqa: E402
 from app.routers.push import test_push  # noqa: E402
 from app.summary import run_summary, SCOPES  # noqa: E402
 from app.models import (  # noqa: E402
@@ -720,7 +721,7 @@ def _cmd_test_email(args) -> int:
     # send_email() is best-effort and returns False (without raising) on any
     # SMTP error, so we treat False as a failure and report it.
     sent = send_email(
-        "Community Chat — test email",
+        f"{community_brand()} — test email",
         test_email_html(),
         to_addr,
         TEXT_TEST,

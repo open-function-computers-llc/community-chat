@@ -227,6 +227,36 @@ def test_brand_illustration_is_inlined(monkeypatch):
     assert [p for p in msg.walk() if p.get_content_type() == "image/png"] == []
 
 
+def test_community_name_brands_email_copy(monkeypatch):
+    # COMMUNITY_NAME drives the reader-facing brand ("{name} Chat") across
+    # subjects, body copy, footers, and the masthead alt — while the CTA
+    # buttons stay generic product wording by design.
+    monkeypatch.setenv("COMMUNITY_NAME", "Whimsy and Wonder")
+
+    welcome = _norm(email_mod.welcome_html("Cy"))
+    assert "Welcome to Whimsy and Wonder Chat" in welcome
+    assert "Whimsy and Wonder Chat" in welcome
+    assert "Powered by Community Chat" in welcome
+    assert 'alt="Whimsy and Wonder Chat"' in welcome
+
+    invite = _norm(email_mod.invite_html("there", "CODE1", "http://x/l?code=CODE1", None))
+    assert "invited to join Whimsy and Wonder Chat." in invite
+    assert "Join Community Chat" in invite  # button stays generic
+    assert "Powered by Community Chat" in invite
+
+    # Subjects read the brand live (not frozen at import).
+    from app import summary as summary_mod
+
+    assert summary_mod._scope_subject("nightly") == "Your Whimsy and Wonder Chat daily summary"
+
+    # No COMMUNITY_NAME: plain product name, never the doubled brand.
+    monkeypatch.delenv("COMMUNITY_NAME")
+    welcome = _norm(email_mod.welcome_html("Cy"))
+    assert "Welcome to Community Chat" in welcome
+    assert "Community Chat Chat" not in welcome
+    assert "Powered by Community Chat" in welcome
+
+
 def test_register_fires_welcome_and_invite(monkeypatch):
     welcome: list[str] = []
     invites: list[str] = []
