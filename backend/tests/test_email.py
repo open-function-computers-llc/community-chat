@@ -247,6 +247,34 @@ def test_render_welcome():
     assert "http://localhost:8983/" in html
 
 
+def test_templates_escape_untrusted_text():
+    # %%MERGE_TAG%% values are escaped by default: user-controlled text can
+    # never inject markup, even if a call site forgets to escape.
+    html = email_mod._group_html("<script>alert(1)</script>", "a > b & c")
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+    assert "a &gt; b &amp; c" in html
+    html = email_mod.invite_html("Ben <b>", "CODE1", "http://x/?a=1&b=2", "A & B")
+    assert "Ben &lt;b&gt;" in html
+    assert "A &amp; B" in html
+    assert "a=1&amp;b=2" in html  # attribute context too
+
+
+def test_templates_render_all_bodies():
+    # Smoke: every shipped template merges without leftover %%TAG%%s.
+    for html in (
+        email_mod._group_html("Al", "hi"),
+        email_mod._group_html("Al", "hi", room_label="The Alfords"),
+        email_mod.invite_html("Bo", "X", "http://x", "Fam"),
+        email_mod.invite_html("Bo", "X", "http://x", None),
+        email_mod.welcome_html("Cy"),
+        email_mod.welcome_html(""),
+        email_mod.password_reset_html("Di", "pw", "di"),
+        email_mod.test_email_html(),
+    ):
+        assert "%%" not in html
+
+
 # --- opportunistic STARTTLS (Mailpit-safety regression) --------------------
 class _StubSMTP:
     """Stand-in for smtplib.SMTP. Set _StubSMTP.supports_starttls to control

@@ -9,6 +9,11 @@ Mirrors the web-push fan-out in push.py: routers fire a best-effort background
 task right after the request commits; each opens its OWN session and does the
 blocking SMTP send in a worker thread so the event loop stays responsive.
 Failure to send an email is logged and never affects the message delivery.
+
+The HTML lives in app/templates/email/ as plain HTML files with %%MERGE_TAG%%
+placeholders (base.html is the shared frame; each email has its own file, with
+optional lines as partials/). _merge() fills the tags and escapes values by
+default, so the templates are syntax-highlightable and safe.
 """
 from __future__ import annotations
 
@@ -16,6 +21,7 @@ import asyncio
 import logging
 import smtplib
 from email.message import EmailMessage
+from pathlib import Path
 from typing import Iterable
 
 from fastapi import APIRouter, Depends
@@ -97,54 +103,36 @@ def send_email(subject: str, html: str, to_addr: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Rendering helpers
+# Templates
 # ---------------------------------------------------------------------------
+# All email HTML lives in app/templates/email/ as plain HTML files with
+# %%MERGE_TAG%% placeholders — readable with standard HTML/CSS syntax
+# highlighting, no template engine. _merge() fills the tags and HTML-escapes
+# every value by default (templates stay safe even if a call site forgets);
+# fragments produced by _merge() are marked _Raw so they compose without
+# double-escaping.
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates" / "email"
+
+
+class _Raw(str):
+    """A pre-rendered HTML fragment — injected into templates unescaped."""
+
+
 def _esc(s: str) -> str:
     return (
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 
-_BASE_CSS = (
-    '<html><head><meta name="x-apple-disable-message-reformatting"></head>'
-    '<body style="margin:0;padding:0;background:#f4f5f7;font-family:Arial,Helvetica,sans-serif;color:#1c1e21;">'
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0;">'
-    '<tr><td align="center"><table role="presentation" width="600" cellpadding="0" cellspacing="0" '
-    'style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;">'
-)
-_FOOTER = (
-    '<tr><td style="padding:20px;text-align:center;color:#9aa0a6;font-size:12px;">'
-    "<p style=\"margin:0;\">Community Chat &middot; you're getting this because you turned on "
-    'email notifications.<br>Manage or stop them in Settings.</p></td></tr></table></td></tr></table></body></html>'
-)
-
-
-def _header_html(title: str) -> str:
-    return (
-        '<tr><td style="padding:20px 28px 12px;"><div style="font-size:18px;font-weight:bold;">'
-        f"{_esc(title)}</div></td></tr>"
-    )
-
-
-def _body_html(text: str) -> str:
-    return f'<tr><td style="padding:0 28px 8px;font-size:15px;line-height:1.5;">{_esc(text)}</td></tr>'
-
-
-def _button_html(label: str, url: str) -> str:
-    return (
-        '<tr><td style="padding:16px 28px;"><a href="'
-        f'{_esc(url)}" target="_blank" style="display:inline-block;background:#4f46e5;color:#ffffff;'
-        'text-decoration:none;padding:12px 22px;border-radius:8px;font-size:14px;font-weight:bold;">'
-        f"{_esc(label)}</a></td></tr>"
-    )
-
-
-def _render(title: str, body: str, button_label: str | None = None, button_url: str | None = None) -> str:
-    parts = [_BASE_CSS, _header_html(title), _body_html(body)]
-    if button_label and button_url:
-        parts.append(_button_html(button_label, button_url))
-    parts.append(_FOOTER)
-    return "".join(parts)
+def _merge(template: str, **tags: str) -> _Raw:
+    """Render a template file from templates/email/ by replacing each
+    %%TAG%% with its value. Values are escaped unless already _Raw."""
+    html = (_TEMPLATES_DIR / template).read_text(encoding="utf-8")
+    for tag, value in tags.items():
+        if not isinstance(value, _Raw):
+            value = _esc("" if value is None else str(value))
+        html = html.replace(f"%%{tag}%%", value)
+    return _Raw(html)
 
 
 # ---------------------------------------------------------------------------
@@ -205,58 +193,47 @@ def _group_subject(text: str) -> str:
 
 
 def _group_html(sender_name: str, text: str, room_label: str | None = None) -> str:
-    snippet = (text or "").strip() or "(attachment)"
-    if room_label:
-        intro = f"<p style='margin:0 0 12px;color:#5f6368;font-size:13px;'>{_esc(room_label)}</p>"
-    else:
-        intro = ""
-    body = (
-        f"{intro}<p style='margin:0 0 4px;font-weight:bold;'>{_esc(sender_name)}</p>"
-        f"<p style='margin:0;'>{_esc(snippet)}</p>"
+    room_block = (
+        _merge("partials/room_label.html", ROOM_LABEL=room_label) if room_label else _Raw("")
     )
-    return (
-        _BASE_CSS
-        + _header_html("New message")
-        + f'<tr><td style="padding:0 28px 8px;">{body}</td></tr>'
-        + _button_html("Open Community Chat", app_origin() + "/")
-        + _FOOTER
+    return _merge(
+        "base.html",
+        EMAIL_BODY=_merge(
+            "group_message.html",
+            SENDER_NAME=sender_name,
+            SNIPPET=(text or "").strip() or "(attachment)",
+            ROOM_LABEL_BLOCK=room_block,
+            BUTTON_URL=app_origin() + "/",
+        ),
     )
 
 
 def invite_html(recipient_name: str, code: str, link: str, family_name: str | None) -> str:
-    fam = f"<p style='margin:12px 0 0;color:#5f6368;font-size:13px;'>Family: {_esc(family_name)}</p>" if family_name else ""
-    body = (
-        f"<p style='margin:0;'>Hey {_esc(recipient_name)}, you've been invited to join Community Chat.</p>"
-        f"<p style='margin:16px 0 4px;font-size:13px;color:#5f6368;'>Invite code</p>"
-        f"<p style='margin:0 0 8px;font-family:monospace;font-size:20px;font-weight:bold;letter-spacing:0.1em;'>"
-        f"{_esc(code)}</p>{fam}"
+    family_block = (
+        _merge("partials/invite_family.html", FAMILY_NAME=family_name) if family_name else _Raw("")
     )
-    return (
-        _BASE_CSS
-        + _header_html("You're invited")
-        + f'<tr><td style="padding:0 28px 8px;">{body}</td></tr>'
-        + _button_html("Join Community Chat", link)
-        + _FOOTER
+    return _merge(
+        "base.html",
+        EMAIL_BODY=_merge(
+            "invite.html",
+            RECIPIENT_NAME=recipient_name,
+            CODE=code,
+            FAMILY_BLOCK=family_block,
+            LINK=link,
+        ),
     )
 
 
 def password_reset_html(recipient_name: str, password: str, handle: str) -> str:
-    body = (
-        f"<p style='margin:0 0 12px;'>Hey {_esc(recipient_name)}, an administrator reset the password "
-        f"for your Community Chat account ({_esc(handle)}). Sign in with your username and the "
-        "temporary password below.</p>"
-        f"<p style='margin:0 0 4px;font-size:13px;color:#5f6368;'>Temporary password</p>"
-        f"<p style='margin:0 0 8px;font-family:monospace;font-size:20px;font-weight:bold;letter-spacing:0.05em;'>"
-        f"{_esc(password)}</p>"
-        f"<p style='margin:8px 0 0;font-size:13px;color:#5f6368;'>"
-        "We recommend changing it to something you remember after you sign in.</p>"
-    )
-    return (
-        _BASE_CSS
-        + _header_html("Your Community Chat password was reset")
-        + f'<tr><td style="padding:0 28px 8px;">{body}</td></tr>'
-        + _button_html("Sign in", app_origin() + "/login")
-        + _FOOTER
+    return _merge(
+        "base.html",
+        EMAIL_BODY=_merge(
+            "password_reset.html",
+            RECIPIENT_NAME=recipient_name,
+            PASSWORD=password,
+            HANDLE=handle,
+            SIGNIN_URL=app_origin() + "/login",
+        ),
     )
 
 
@@ -271,30 +248,19 @@ def send_password_reset_email(to_addr: str, recipient_name: str, password: str, 
 
 def welcome_html(display_name: str) -> str:
     name = (display_name or "").split()[0] if display_name else ""
-    body = f"<p style='margin:0;'>Welcome{f' {name}' if name else ''}! You've joined Community Chat.</p>"
-    return (
-        _BASE_CSS
-        + _header_html("Welcome to Community Chat")
-        + f'<tr><td style="padding:0 28px 8px;">{body}</td></tr>'
-        + _button_html("Open the app", app_origin() + "/")
-        + _FOOTER
+    greeting = f"Welcome{f' {name}' if name else ''}! You've joined Community Chat."
+    return _merge(
+        "base.html",
+        EMAIL_BODY=_merge("welcome.html", GREETING=greeting, APP_URL=app_origin() + "/"),
     )
 
 
 def test_email_html() -> str:
     """A fixed, branded message used by the `manage.py test-email` command to
     verify the SMTP configuration is actually delivering mail."""
-    body = (
-        "<p style='margin:0 0 12px;'>If you can read this, your Community Chat "
-        "email (SMTP) configuration is working.</p>"
-        "<p style='margin:0;'>This is a test message. You don't need to reply.</p>"
-    )
-    return (
-        _BASE_CSS
-        + _header_html("Community Chat — test email")
-        + f'<tr><td style="padding:0 28px 8px;">{body}</td></tr>'
-        + _button_html("Open the app", app_origin() + "/")
-        + _FOOTER
+    return _merge(
+        "base.html",
+        EMAIL_BODY=_merge("test_email.html", APP_URL=app_origin() + "/"),
     )
 
 

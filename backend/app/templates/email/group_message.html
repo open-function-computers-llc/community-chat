@@ -1,0 +1,20 @@
+<!-- New-message notification for the group chat and family rooms. Filled by
+     email.py::_group_html. The ROOM_LABEL_BLOCK tag is either empty or the
+     partials/room_label.html fragment (family-room messages only). -->
+<tr>
+  <td style="padding: 20px 28px 12px;">
+    <div style="font-size: 18px; font-weight: bold;">New message</div>
+  </td>
+</tr>
+<tr>
+  <td style="padding: 0 28px 8px;">
+    %%ROOM_LABEL_BLOCK%%
+    <p style="margin: 0 0 4px; font-weight: bold;">%%SENDER_NAME%%</p>
+    <p style="margin: 0;">%%SNIPPET%%</p>
+  </td>
+</tr>
+<tr>
+  <td style="padding: 16px 28px;">
+    <a href="%%BUTTON_URL%%" target="_blank" style="display: inline-block; background: #4f46e5; color: #ffffff; text-decoration: none; padding: 12px 22px; border-radius: 8px; font-size: 14px; font-weight: bold;">Open Community Chat</a>
+  </td>
+</tr>
