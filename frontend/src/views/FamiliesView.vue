@@ -90,6 +90,9 @@ const inviteUses = ref(1);
 const inviteResult = ref(null); // { familyId, code, link, uses, id?, fresh? }
 const creatingInvite = ref(false);
 const invites = ref([]); // all invites (admin) from /api/invites
+const showEmailForm = ref(false);
+const emailInput = ref("");
+const emailing = ref(false);
 
 function inviteLink(code) {
   return `${window.location.origin}/login?code=${code}`;
@@ -126,6 +129,8 @@ function startInvite(f) {
     return;
   }
   const existing = activeInviteFor(f);
+  showEmailForm.value = false;
+  emailInput.value = "";
   if (existing) {
     // Reuse the family's existing active invite rather than creating a new one.
     inviteResult.value = {
@@ -147,6 +152,8 @@ function cancelInvite() {
   invitingFor.value = null;
   inviteResult.value = null;
   inviteUses.value = 1;
+  showEmailForm.value = false;
+  emailInput.value = "";
 }
 
 // Revoke the invite just shown (drops it; a new one can be created after).
@@ -193,6 +200,37 @@ async function createInvite(f) {
 async function copyText(text, label) {
   await navigator.clipboard.writeText(text);
   toast(`${label} copied to clipboard`, "success");
+}
+
+function parseEmails(raw) {
+  return [...new Set(
+    raw
+      .split(/[\s,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  )];
+}
+
+async function emailInvite() {
+  if (!inviteResult.value?.id || emailing.value) return;
+  const emails = parseEmails(emailInput.value);
+  if (emails.length === 0) {
+    toast("Add at least one email address", "error");
+    return;
+  }
+  emailing.value = true;
+  try {
+    const res = await api.post(`/api/invites/${inviteResult.value.id}/email`, { emails });
+    if (res.failed && res.failed.length) {
+      toast(`Sent to ${res.sent}, failed: ${res.failed.join(", ")}`, "error");
+    } else {
+      toast(`Invite emailed to ${res.sent} address${res.sent === 1 ? "" : "es"}`, "success");
+    }
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    emailing.value = false;
+  }
 }
 
 onMounted(async () => {
@@ -466,6 +504,22 @@ async function remove(f) {
                 <code class="invite-link">{{ inviteResult.link }}</code>
                 <button class="btn btn-ghost btn-sm" @click="copyText(inviteResult.link, 'Link')">Copy link</button>
               </div>
+              <div class="invite-email-toggle">
+                <button class="btn btn-ghost btn-sm" @click="showEmailForm = !showEmailForm">
+                  ✉️ Email this invite
+                </button>
+              </div>
+              <div v-if="showEmailForm" class="invite-email-form">
+                <input
+                  v-model="emailInput"
+                  placeholder="name@example.com, grandma@example.com"
+                  :disabled="emailing"
+                  @keyup.enter="emailInvite"
+                />
+                <button class="btn btn-sm" :disabled="emailing" @click="emailInvite">
+                  {{ emailing ? "Sending…" : "Send" }}
+                </button>
+              </div>
               <div class="invite-result-foot">
                 <p class="invite-uses-note">{{ inviteResult.uses }} use{{ inviteResult.uses === 1 ? "" : "s" }} · new members join {{ f.name }}</p>
                 <button
@@ -631,6 +685,18 @@ async function remove(f) {
 }
 .invite-code-row,
 .invite-link-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.invite-email-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.invite-email-form input {
+  flex: 1;
+  min-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+.invite-email-form input:focus { outline: none; border-color: var(--accent); }
 .invite-code {
   font-family: monospace;
   font-size: 18px;
